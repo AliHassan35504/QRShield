@@ -1,127 +1,131 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';  // For copying to clipboard
+import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'url_safety_checker.dart';  // Import the URL checker class
+import 'package:url_launcher/url_launcher.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class Resultscreen extends StatefulWidget {
   final String code;
   final Function() closeScreen;
 
-  const Resultscreen({super.key, required this.closeScreen, required this.code});
+  const Resultscreen({Key? key, required this.closeScreen, required this.code}) : super(key: key);
 
   @override
   _ResultscreenState createState() => _ResultscreenState();
 }
 
 class _ResultscreenState extends State<Resultscreen> {
-  late Future<Map<String, dynamic>> urlSafetyCheck;
+  String? dataType;
+  bool isSafe = true;
+  String safetyMessage = 'Checking...';
 
   @override
   void initState() {
     super.initState();
-    // Start the URL safety check immediately after widget is initialized
-    urlSafetyCheck = UrlSafetyChecker().checkUrlSafety(widget.code);
+
+    dataType = detectQRDataType(widget.code);
+    saveScanResult(widget.code, dataType!);
+
+    if (dataType == 'url') {
+      checkUrlSafety(widget.code);
+    } else {
+      setState(() {
+        safetyMessage = 'No safety check required.';
+      });
+    }
+  }
+
+  String detectQRDataType(String data) {
+    final urlPattern = RegExp(r'^(http|https):\/\/');
+    final emailPattern = RegExp(r'^[\w\.-]+@[\w\.-]+\.\w+$');
+    final phonePattern = RegExp(r'^\+?[0-9]{10,15}$');
+    final wifiPattern = RegExp(r'^WIFI:');
+
+    if (urlPattern.hasMatch(data)) return 'url';
+    if (emailPattern.hasMatch(data)) return 'email';
+    if (phonePattern.hasMatch(data)) return 'phone';
+    if (wifiPattern.hasMatch(data)) return 'wifi';
+    return 'text';
+  }
+
+  Future<void> saveScanResult(String data, String type) async {
+    await FirebaseFirestore.instance.collection('scan_results').add({
+      'data': data,
+      'type': type,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> checkUrlSafety(String url) async {
+    // Replace this with actual safety API logic
+    await Future.delayed(const Duration(seconds: 2));
+    setState(() {
+      isSafe = true;
+      safetyMessage = '✅ This URL is safe.';
+    });
+  }
+
+  void _launchUrl() async {
+    final uri = Uri.parse(widget.code);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Cannot open the URL.")));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (dataType == null) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
+        title: const Text('Scan Result'),
         leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
           onPressed: () {
             widget.closeScreen();
             Navigator.pop(context);
           },
-          icon: Icon(Icons.arrow_back_ios_new, color: Colors.black87),
-        ),
-        centerTitle: true,
-        title: const Text(
-          "QR Scanner",
-          style: TextStyle(
-            color: Colors.black87,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 1,
-          ),
         ),
       ),
-      body: Container(
-        alignment: Alignment.center,
-        child: Padding(
-          padding: const EdgeInsets.all(12.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              QrImageView(
-                data: widget.code,
-                size: 150,
-                version: QrVersions.auto,
-              ),
-              const SizedBox(height: 20),
-              Text(
-                "Scanned Result",
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.black54,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
-                ),
-              ),
+      body: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            QrImageView(data: widget.code, size: 200),
+            const SizedBox(height: 20),
+            SelectableText(
+              widget.code,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 16, color: Colors.blueAccent),
+            ),
+            const SizedBox(height: 10),
+            Text('Type: $dataType', style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            Text('Safety: $safetyMessage', style: TextStyle(color: isSafe ? Colors.green : Colors.red)),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: widget.code));
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Copied to clipboard.")));
+              },
+              icon: const Icon(Icons.copy),
+              label: const Text("Copy"),
+            ),
+            if (dataType == 'url') ...[
               const SizedBox(height: 10),
-              Text(
-                widget.code,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.black87,
-                  letterSpacing: 1,
-                ),
-              ),
-              const SizedBox(height: 20),
-              // Use FutureBuilder to check the URL safety asynchronously
-              FutureBuilder<Map<String, dynamic>>(
-                future: urlSafetyCheck,
-                builder: (context, snapshot) {
-                  // Show loading indicator while waiting for result
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return CircularProgressIndicator();
-                  }
-
-                  if (snapshot.hasError) {
-                    return Text("Error: ${snapshot.error}");
-                  }
-
-                  final result = snapshot.data;
-                  if (result != null) {
-                    return Column(
-                      children: [
-                        // Display whether the URL is safe or malicious
-                        Text(
-                          result["message"], // Display the safety message
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: result["isSafe"] ? Colors.green : Colors.red,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        SizedBox(height: 10),
-                        // Button to copy the URL to clipboard
-                        ElevatedButton(
-                          onPressed: () {
-                            Clipboard.setData(ClipboardData(text: widget.code));
-                            ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text("URL copied to clipboard")));
-                          },
-                          child: Text("Copy URL"),
-                        ),
-                      ],
-                    );
-                  } else {
-                    return Text("Error checking URL safety.");
-                  }
-                },
+              ElevatedButton.icon(
+                onPressed: _launchUrl,
+                icon: const Icon(Icons.open_in_browser),
+                label: const Text("Open URL"),
               ),
             ],
-          ),
+          ],
         ),
       ),
     );
