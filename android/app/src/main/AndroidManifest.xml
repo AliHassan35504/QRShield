@@ -4,6 +4,11 @@
     <!-- Permissions -->
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+    android:maxSdkVersion="28"/>
+
+    <uses-feature android:name="android.hardware.camera" android:required="true" />
 
     <!-- Package visibility queries must be direct children of <manifest> -->
     <queries>
@@ -27,6 +32,7 @@
         android:label="qrshield"
         android:name="${applicationName}"
         android:icon="@mipmap/qrshield">
+
         
         <activity
             android:name=".MainActivity"

@@ -4,6 +4,7 @@ import 'package:qrshield/screens/signin_screen.dart';
 
 void main() async{
   WidgetsFlutterBinding.ensureInitialized();
+  WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
   runApp(const MyApp());
 }

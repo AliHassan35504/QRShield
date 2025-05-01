@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "com.example.qrshield"
-    compileSdk = 34
+    compileSdk = 35
     buildToolsVersion "34.0.0"
     ndkVersion = flutter.ndkVersion
 

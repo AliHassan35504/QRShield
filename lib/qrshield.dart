@@ -1,12 +1,13 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:qr_scanner_overlay/qr_scanner_overlay.dart';
 import 'package:qrshield/resultscreen.dart';
 import 'package:qrshield/screens/historyscreen.dart';
 import 'package:qrshield/screens/signin_screen.dart';
 
-const bgColor = Color.fromARGB(255, 61, 74, 165);
+const bgColor = Color.fromARGB(255, 18, 18, 18);
 
 class Qrshield extends StatefulWidget {
   const Qrshield({Key? key}) : super(key: key);
@@ -20,6 +21,52 @@ class _QrshieldState extends State<Qrshield> {
   bool isFlashOn = false;
   bool isFrontCamera = false;
   final MobileScannerController controller = MobileScannerController();
+
+  @override
+  void initState() {
+    super.initState();
+    _requestCameraPermission().then((_) {
+      print('✅ Camera permission granted, starting scanner...');
+    }).catchError((e) {
+      print('❌ Camera permission request error: $e');
+    });
+  }
+
+  Future<void> _requestCameraPermission() async {
+    final status = await Permission.camera.status;
+    if (!status.isGranted) {
+      final result = await Permission.camera.request();
+      if (!result.isGranted) {
+        _showPermissionDialog();
+        return;
+      }
+    }
+    // ✅ Start the camera if permission is granted
+    await controller.start();
+  }
+
+  void _showPermissionDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text("Camera Permission Required"),
+        content: const Text("Please enable camera permission to scan QR codes."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: () {
+              openAppSettings();
+              Navigator.pop(context);
+            },
+            child: const Text("Open Settings"),
+          ),
+        ],
+      ),
+    );
+  }
 
   void closeScreen() {
     setState(() {
@@ -77,16 +124,23 @@ class _QrshieldState extends State<Qrshield> {
   }
 
   @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: bgColor,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
+        elevation: 0,
         title: const Text(
           "QRSHIELD",
           style: TextStyle(
             fontSize: 26,
-            color: Colors.black87,
+            color: Colors.white,
             fontWeight: FontWeight.bold,
             letterSpacing: 1,
           ),
@@ -102,7 +156,6 @@ class _QrshieldState extends State<Qrshield> {
             onPressed: _switchCamera,
           ),
         ],
-        iconTheme: const IconThemeData(color: Colors.black87),
       ),
       body: SafeArea(
         child: Column(
@@ -125,7 +178,9 @@ class _QrshieldState extends State<Qrshield> {
                 children: [
                   MobileScanner(
                     controller: controller,
+                    fit: BoxFit.cover,
                     onDetect: (capture) {
+                      print("📷 QR code detected: ${capture.barcodes}");
                       if (!isScanCompleted) {
                         for (final barcode in capture.barcodes) {
                           final String? code = barcode.rawValue;
@@ -137,8 +192,10 @@ class _QrshieldState extends State<Qrshield> {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (context) =>
-                                    Resultscreen(code: code, closeScreen: closeScreen),
+                                builder: (context) => Resultscreen(
+                                  code: code,
+                                  closeScreen: closeScreen,
+                                ),
                               ),
                             ).then((_) => closeScreen());
                           }
