@@ -1,3 +1,5 @@
+// lib/resultscreen.dart
+
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,7 +9,10 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_storage/firebase_storage.dart';
+import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:open_file/open_file.dart';
+
 import 'offline_url_checker.dart';
 import 'url_safety_checker.dart';
 import 'view_pdf_screen.dart';
@@ -39,112 +44,22 @@ class _ResultscreenState extends State<Resultscreen> {
   }
 
   Future<Map<String, dynamic>> _initSafetyCheck() async {
-    final offlineChecker = OfflineUrlChecker();
-    final heurSusp = offlineChecker.isSuspicious(widget.code);
-    final heurMsg = heurSusp ? 'Suspicious format or shortener' : 'Format looks OK';
-    final heurScore = heurSusp ? 20.0 : 0.0;
-
-    if (dataType != 'URL' && dataType != 'Form' && dataType != 'WhatsApp') {
-      final result = {
-        'isSafe': heurScore == 0,
-        'message': heurMsg,
-        'scores': {'Heuristic': heurScore},
-        'probability': heurScore,
-        'details': {'Heuristic': heurMsg},
-      };
-      safetyResult = result;
-      await _saveScan(isSafe: result['isSafe'] as bool, message: heurMsg, reportUrl: null);
-      return result;
-    }
-
-    final isOffline = (await Connectivity().checkConnectivity()) == ConnectivityResult.none;
-
-    double googleScore = 0, vtScore = 0, phishScore = 0, ipqsScore = 0;
-    String googleMsg = '', vtMsg = '', phishMsg = '', ipqsMsg = '', urlscanMsg = '';
-    List<String> extraDetails = [];
-
-    if (!isOffline) {
-      try {
-        final g = await UrlSafetyChecker().googleCheck(widget.code);
-        googleMsg = g['message'] ?? '';
-        googleScore = (g['isSafe'] == true) ? 0.0 : 30.0;
-      } catch (e) {
-        googleMsg = 'Google check failed';
-        googleScore = 15.0;
-      }
-
-      try {
-        final v = await UrlSafetyChecker().virusTotalCheck(widget.code);
-        vtMsg = v['message'] ?? '';
-        vtScore = (v['isSafe'] == true) ? 0.0 : 30.0;
-      } catch (e) {
-        vtMsg = 'VirusTotal check failed';
-        vtScore = 15.0;
-      }
-
-      try {
-        final p = await UrlSafetyChecker().openPhishCheck(widget.code);
-        phishMsg = p['message'] ?? '';
-        phishScore = (p['isSafe'] == true) ? 0.0 : 20.0;
-      } catch (e) {
-        phishMsg = 'OpenPhish check failed';
-        phishScore = 10.0;
-      }
-
-      try {
-        final ipq = await UrlSafetyChecker().checkWithIPQualityScore(widget.code);
-        ipqsMsg = ipq['message'] ?? '';
-        ipqsScore = (ipq['isSafe'] == true) ? 0.0 : 20.0;
-      } catch (e) {
-        ipqsMsg = 'IPQualityScore check failed';
-        ipqsScore = 10.0;
-      }
-
-      try {
-        final uscan = await UrlSafetyChecker().checkWithUrlScan(widget.code);
-        urlscanMsg = uscan['message'] ?? '';
-        final d = uscan['details'] as List?;
-        if (d != null) extraDetails.addAll(d.map((e) => e.toString()));
-      } catch (_) {}
-    }
-
-    final total = heurScore + googleScore + vtScore + phishScore + ipqsScore;
-    final isSafe = total == 0;
-
-    final result = {
-      'isSafe': isSafe,
-      'message': isSafe
-          ? 'No threats detected (Risk 0%)'
-          : 'Threats detected (Risk ${total.toStringAsFixed(1)}%)',
-      'scores': {
-        'Heuristic': heurScore,
-        'Google Safe Browsing': googleScore,
-        'VirusTotal': vtScore,
-        'OpenPhish': phishScore,
-        'IPQualityScore': ipqsScore,
-      },
-      'probability': total,
-      'details': {
-        'Heuristic': heurMsg,
-        'Google Safe Browsing': googleMsg,
-        'VirusTotal': vtMsg,
-        'OpenPhish': phishMsg,
-        'IPQualityScore': ipqsMsg,
-        if (urlscanMsg.isNotEmpty) 'urlscan.io': urlscanMsg,
-        if (extraDetails.isNotEmpty) 'URLScan Details': extraDetails.join('\n')
-      },
-    };
-
+    final checker = UrlSafetyChecker();
+    final result = await checker.checkFullReport(widget.code);
     safetyResult = result;
-    await _saveScan(isSafe: isSafe, message: result['message'] as String, reportUrl: null);
+    await _saveScan(
+      isSafe: result['isSafe'] == true,
+      message: result['finalVerdict'] ?? 'Unknown',
+      reportUrl: null,
+    );
     return result;
   }
 
   Future<void> _saveScan({required bool isSafe, required String message, String? reportUrl}) async {
-    final u = FirebaseAuth.instance.currentUser;
-    if (u == null) return;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
     await FirebaseFirestore.instance.collection('scanHistory').add({
-      'userId': u.uid,
+      'userId': user.uid,
       'code': widget.code,
       'type': dataType,
       'isSafe': isSafe,
@@ -154,85 +69,85 @@ class _ResultscreenState extends State<Resultscreen> {
     });
   }
 
-  String _detectQRDataType(String d) {
-    final l = d.toLowerCase();
-    if (l.contains('wa.me') || l.contains('api.whatsapp.com/send')) return 'WhatsApp';
-    if (l.contains('forms.gle') || l.contains('docs.google.com/forms')) return 'Form';
-    if (l.startsWith('http')) return 'URL';
-    if (d.startsWith('WIFI:')) return 'WiFi';
-    if (RegExp(r'^\+?[0-9]{6,15}$').hasMatch(d)) return 'Phone';
-    if (RegExp(r'^\w+@[\w\-]+\.\w{2,4}$').hasMatch(d)) return 'Email';
-    return 'Text';
-  }
-
-  Map<String, String> _parseWiFiDetails(String raw) {
-    final out = <String, String>{};
-    for (final m in RegExp(r'(S|T|P):([^;]*)').allMatches(raw)) {
-      final k = m.group(1), v = m.group(2);
-      if (k != null && v != null) out[k] = v;
-    }
-    return {
-      'SSID': out['S'] ?? '',
-      'Encryption': out['T'] ?? '',
-      'Password': out['P'] ?? '',
-    };
-  }
-
-  Map<String, String> _parseWhatsAppDetails(String raw) {
-    final uri = Uri.tryParse(raw);
-    return {
-      'number': (uri?.pathSegments.isNotEmpty ?? false) ? uri!.pathSegments.first : '',
-      'text': uri?.queryParameters['text'] ?? '',
-    };
-  }
-
   Future<void> _generatePdfReport() async {
     if (safetyResult['isSafe'] == true) return;
-    final u = FirebaseAuth.instance.currentUser;
+
+    final user = FirebaseAuth.instance.currentUser;
     final pdf = pw.Document();
     final now = DateTime.now();
+    final section = safetyResult;
 
-    pdf.addPage(pw.Page(build: (_) => pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.start,
-      children: [
-        pw.Text('QRSHIELD Threat Report', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
-        pw.SizedBox(height: 6),
-        pw.Text('User: ${u?.email ?? 'Unknown'}'),
-        pw.Text('Date: $now'),
-        pw.SizedBox(height: 10),
-        pw.Text('Type: $dataType'),
-        pw.Text('Data: ${widget.code}'),
-        if (wifiDetails.isNotEmpty) ...[
-          pw.SizedBox(height: 8),
-          pw.Text('--- WiFi Info ---'),
-          ...wifiDetails.entries.map((e) => pw.Text('${e.key}: ${e.value}')),
+    pdf.addPage(pw.Page(
+      theme: pw.ThemeData.withFont(
+        base: pw.Font.helvetica(),
+        bold: pw.Font.helveticaBold(),
+      ),
+      build: (_) => pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text('QRSHIELD Threat Report', style: pw.TextStyle(fontSize: 24, fontWeight: pw.FontWeight.bold)),
+          pw.SizedBox(height: 6),
+          pw.Text('User: ${user?.email ?? 'Unknown'}'),
+          pw.Text('Date: $now'),
+          pw.Text('Type: $dataType'),
+          pw.Text('Raw Data: ${widget.code}'),
+          if (wifiDetails.isNotEmpty) ...[
+            pw.SizedBox(height: 8),
+            pw.Text('--- Wi-Fi Details ---'),
+            ...wifiDetails.entries.map((e) => pw.Text('${e.key}: ${e.value}')).toList(),
+          ],
+          if (whatsappDetails.isNotEmpty) ...[
+            pw.SizedBox(height: 8),
+            pw.Text('--- WhatsApp Details ---'),
+            ...whatsappDetails.entries.map((e) => pw.Text('${e.key}: ${e.value}')).toList(),
+          ],
+          pw.SizedBox(height: 12),
+
+          pw.Text('1. HEURISTIC (OFFLINE) ANALYSIS', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+          for (var key in ['url_scheme', 'is_absolute', 'uses_ip', 'uses_shortener', 'suspicious_tld', 'contains_keywords', 'is_encoded', 'is_long_url'])
+            pw.Text('$key: ${section['heuristic']?[key]?.toString() ?? 'N/A'}'),
+          pw.Text('Trigger List:'),
+          for (var trigger in (section['heuristic']?['triggers'] as List? ?? [])) pw.Text('• $trigger'),
+
+          pw.SizedBox(height: 10),
+          pw.Text('2. GOOGLE SAFE BROWSING', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+          pw.Text('Safe: ${section['google_safe'] ?? 'N/A'}'),
+          pw.Text('Matched Categories: ${section['google_matches']?.join(', ') ?? 'None'}'),
+          pw.Text('Details: ${section['google_message'] ?? 'N/A'}'),
+
+          pw.SizedBox(height: 10),
+          pw.Text('3. VIRUSTOTAL SCAN', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+          pw.Text('Malicious Engines: ${section['vt_malicious'] ?? 'N/A'}'),
+          pw.Text('Suspicious Engines: ${section['vt_suspicious'] ?? 'N/A'}'),
+          pw.Text('Total Engines: ${section['vt_total'] ?? 'N/A'}'),
+          pw.Text('Safe: ${section['vt_safe'] ?? 'N/A'}'),
+          pw.Text('Message: ${section['vt_message'] ?? 'N/A'}'),
+
+          pw.SizedBox(height: 10),
+          pw.Text('4. OPENPHISH FEED', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+          pw.Text('Listed in Feed: ${section['phish_safe'] == false}'),
+          pw.Text('Message: ${section['phish_message'] ?? 'N/A'}'),
+
+          pw.SizedBox(height: 10),
+          pw.Text('5. IPQUALITYSCORE', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+          for (var key in ['risk_score', 'malware', 'phishing', 'domain_rank', 'spamming', 'suspicious'])
+            pw.Text('$key: ${section['ipq']?[key]?.toString() ?? 'N/A'}'),
+          pw.Text('Message: ${section['ipq']?['message'] ?? 'N/A'}'),
+
+          pw.SizedBox(height: 10),
+          pw.Text('6. URLSCAN.IO', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+          pw.Text('Status: ${section['scan_status'] ?? 'N/A'}'),
+          pw.Text('Result URL: ${section['scan_result'] ?? 'N/A'}'),
+          pw.Text('Screenshot URL: ${section['scan_screenshot'] ?? 'N/A'}'),
+
+          pw.SizedBox(height: 16),
+          pw.Text('FINAL VERDICT', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
+          pw.Text('Overall Risk Score: ${(section['final_score'] ?? 0).toString()}%'),
+          pw.Text('Classification: ${section['isSafe'] == false ? 'Malicious' : 'Safe'}'),
+          pw.Text('Recommendation: ${section['finalVerdict'] ?? 'N/A'}'),
         ],
-        if (whatsappDetails.isNotEmpty) ...[
-          pw.SizedBox(height: 8),
-          pw.Text('--- WhatsApp Info ---'),
-          ...whatsappDetails.entries.map((e) => pw.Text('${e.key}: ${e.value}')),
-        ],
-        pw.SizedBox(height: 12),
-        pw.Text('Message: ${safetyResult['message']}'),
-        pw.Text('Total Risk: ${(safetyResult['probability'] as num).toStringAsFixed(1)}%'),
-        pw.SizedBox(height: 8),
-        pw.Text('--- Scoring Breakdown ---'),
-        ...((safetyResult['scores'] as Map<String, dynamic>).entries.map(
-          (e) => pw.Text('${e.key}: ${e.value.toString()}%'))),
-        pw.SizedBox(height: 8),
-        pw.Text('--- Source Explanations ---'),
-        ...((safetyResult['details'] as Map<String, dynamic>).entries.expand((e) {
-          if (e.value is String) return [pw.Text('${e.key}: ${e.value}')];
-          if (e.value is List) {
-            return [
-              pw.Text('${e.key}:'),
-              ...((e.value as List).map((line) => pw.Bullet(text: line.toString())))
-            ];
-          }
-          return [pw.Text('${e.key}: ${e.value}')];
-        })),
-      ],
-    )));
+      ),
+    ));
 
     final dir = Directory('/storage/emulated/0/Download/QRShield');
     if (!dir.existsSync()) dir.createSync(recursive: true);
@@ -242,33 +157,56 @@ class _ResultscreenState extends State<Resultscreen> {
     setState(() {});
 
     try {
-      final ref = FirebaseStorage.instance.ref('reports/${u?.uid}/${file.uri.pathSegments.last}');
+      final ref = FirebaseStorage.instance.ref('reports/${user?.uid}/${file.uri.pathSegments.last}');
       await ref.putFile(file);
       final url = await ref.getDownloadURL();
-      await _saveScan(isSafe: false, message: safetyResult['message'], reportUrl: url);
+      await _saveScan(isSafe: false, message: section['finalVerdict'] ?? '', reportUrl: url);
     } catch (_) {}
+
     Navigator.push(context, MaterialPageRoute(builder: (_) => ViewPdfScreen(file: pdfFile!)));
   }
 
   Future<void> _accessData() async {
     final raw = widget.code.trim();
     final uri = Uri.tryParse(raw.startsWith('http') ? raw : 'https://$raw');
-    switch (dataType) {
-      case 'URL':
-      case 'Form':
-      case 'WhatsApp':
-        if (uri != null && await canLaunchUrl(uri)) await launchUrl(uri);
-        break;
-      case 'Email':
-        await launchUrl(Uri(scheme: 'mailto', path: raw));
-        break;
-      case 'Phone':
-        await launchUrl(Uri(scheme: 'tel', path: raw));
-        break;
-      default:
-        Clipboard.setData(ClipboardData(text: raw));
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Copied')));
+    if (uri != null && await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    } else {
+      Clipboard.setData(ClipboardData(text: raw));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
     }
+  }
+
+  String _detectQRDataType(String data) {
+    final l = data.toLowerCase();
+    if (l.contains('wa.me') || l.contains('api.whatsapp.com/send')) return 'WhatsApp';
+    if (l.contains('forms.gle') || l.contains('docs.google.com/forms')) return 'Form';
+    if (l.startsWith('http')) return 'URL';
+    if (data.startsWith('WIFI:')) return 'WiFi';
+    if (RegExp(r'^\+?[0-9]{6,15}\$').hasMatch(data)) return 'Phone';
+    if (RegExp(r'^\w+@[\w\-]+\.\w{2,4}\$').hasMatch(data)) return 'Email';
+    return 'Text';
+  }
+
+  Map<String, String> _parseWiFiDetails(String raw) {
+    final out = <String, String>{};
+    for (final m in RegExp(r'(S|T|P):([^;]*)').allMatches(raw)) {
+      final k = m.group(1), v = m.group(2);
+      if (k != null && v != null) {
+        if (k == 'S') out['SSID'] = v;
+        if (k == 'T') out['Encryption'] = v;
+        if (k == 'P') out['Password'] = v;
+      }
+    }
+    return out;
+  }
+
+  Map<String, String> _parseWhatsAppDetails(String raw) {
+    final uri = Uri.tryParse(raw);
+    return {
+      'number': uri?.pathSegments.isNotEmpty == true ? uri!.pathSegments.first : '',
+      'text': uri?.queryParameters['text'] ?? '',
+    };
   }
 
   @override
@@ -283,39 +221,46 @@ class _ResultscreenState extends State<Resultscreen> {
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            QrImageView(data: widget.code, size: 180),
-            const SizedBox(height: 12),
-            Text('Type: $dataType'),
-            if (wifiDetails.isNotEmpty)
-              ...wifiDetails.entries.map((e) => Text('${e.key}: ${e.value}')),
-            if (whatsappDetails.isNotEmpty)
-              ...whatsappDetails.entries.map((e) => Text('WhatsApp ${e.key}: ${e.value}')),
-            const SizedBox(height: 12),
-            FutureBuilder<Map<String, dynamic>>(
-              future: urlSafetyCheck,
-              builder: (ctx, snap) {
-                if (!snap.hasData) return const CircularProgressIndicator();
-                final d = snap.data!;
-                final safe = d['isSafe'] == true;
-                final pct = ((d['probability'] as num?) ?? 0) / 100;
-
-                return Column(children: [
-                  Text(d['message'] ?? 'No message', style: TextStyle(color: safe ? Colors.green : Colors.red)),
-                  LinearProgressIndicator(value: pct, color: safe ? Colors.green : Colors.red),
-                  const SizedBox(height: 10),
-                  ElevatedButton.icon(onPressed: _accessData, icon: Icon(Icons.open_in_browser), label: Text('Open')),
-                  if (!safe)
-                    ElevatedButton.icon(onPressed: _generatePdfReport, icon: Icon(Icons.picture_as_pdf), label: Text('Generate Report')),
-                  if (pdfFile != null)
-                    TextButton.icon(onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ViewPdfScreen(file: pdfFile!))),
-                      icon: Icon(Icons.remove_red_eye), label: Text('View Report')),
-                ]);
-              },
-            ),
-          ],
-        ),
+        child: Column(children: [
+          QrImageView(data: widget.code, size: 180),
+          const SizedBox(height: 12),
+          Text('Type: $dataType'),
+          ...wifiDetails.entries.map((e) => Text('${e.key}: ${e.value}')),
+          ...whatsappDetails.entries.map((e) => Text('WhatsApp ${e.key}: ${e.value}')),
+          const SizedBox(height: 12),
+          FutureBuilder<Map<String, dynamic>>(
+            future: urlSafetyCheck,
+            builder: (ctx, snap) {
+              if (!snap.hasData) return const CircularProgressIndicator();
+              final d = snap.data!;
+              final safe = d['isSafe'] == true;
+              final score = (d['final_score'] as num? ?? 0).toDouble();
+              return Column(children: [
+                Text(d['finalVerdict']?.toString() ?? '', style: TextStyle(color: safe ? Colors.green : Colors.red)),
+                LinearProgressIndicator(value: score / 100, color: safe ? Colors.green : Colors.red),
+                const SizedBox(height: 8),
+                ElevatedButton.icon(
+                  onPressed: _accessData,
+                  icon: const Icon(Icons.open_in_browser),
+                  label: const Text('Open')),
+                const SizedBox(height: 4),
+                if (!safe)
+                  ElevatedButton.icon(
+                    onPressed: _generatePdfReport,
+                    icon: const Icon(Icons.picture_as_pdf),
+                    label: const Text('Generate Report')),
+                if (pdfFile != null)
+                  TextButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => ViewPdfScreen(file: pdfFile!)),
+                    ),
+                    icon: const Icon(Icons.remove_red_eye),
+                    label: const Text('View Report')),
+              ]);
+            },
+          ),
+        ]),
       ),
     );
   }
