@@ -16,7 +16,7 @@ class Qrshield extends StatefulWidget {
   State<Qrshield> createState() => _QrshieldState();
 }
 
-class _QrshieldState extends State<Qrshield> {
+class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
   bool isScanCompleted = false;
   bool isFlashOn = false;
   bool isFrontCamera = false;
@@ -25,11 +25,24 @@ class _QrshieldState extends State<Qrshield> {
   @override
   void initState() {
     super.initState();
-    _requestCameraPermission().then((_) {
-      print('✅ Camera permission granted, starting scanner...');
-    }).catchError((e) {
-      print('❌ Camera permission request error: $e');
-    });
+    WidgetsBinding.instance.addObserver(this);
+    _requestCameraPermission();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+      controller.stop();
+    } else if (state == AppLifecycleState.resumed) {
+      controller.start();
+    }
   }
 
   Future<void> _requestCameraPermission() async {
@@ -41,7 +54,6 @@ class _QrshieldState extends State<Qrshield> {
         return;
       }
     }
-    // ✅ Start the camera if permission is granted
     await controller.start();
   }
 
@@ -124,12 +136,6 @@ class _QrshieldState extends State<Qrshield> {
   }
 
   @override
-  void dispose() {
-    controller.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: bgColor,
@@ -180,7 +186,6 @@ class _QrshieldState extends State<Qrshield> {
                     controller: controller,
                     fit: BoxFit.cover,
                     onDetect: (capture) {
-                      print("📷 QR code detected: ${capture.barcodes}");
                       if (!isScanCompleted) {
                         for (final barcode in capture.barcodes) {
                           final String? code = barcode.rawValue;
@@ -188,7 +193,6 @@ class _QrshieldState extends State<Qrshield> {
                             setState(() {
                               isScanCompleted = true;
                             });
-
                             Navigator.push(
                               context,
                               MaterialPageRoute(
