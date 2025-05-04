@@ -29,6 +29,13 @@
             {
               "client_id": "1049729363762-pvie0fghcojbglbb4f6m45coo51a9kcg.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "1049729363762-sf46j24a1fjufl0e5v10g1h1at74ld2o.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.qrshield"
+              }
             }
           ]
         }
