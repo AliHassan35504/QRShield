@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -5,7 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:csv/csv.dart';
 import 'package:path_provider/path_provider.dart';
-import 'dart:io';
+import '../view_pdf_screen.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({Key? key}) : super(key: key);
@@ -22,7 +23,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     await FirebaseFirestore.instance.collection('scanHistory').doc(docId).delete();
   }
 
-  void _handleDataTap(BuildContext ctx, String raw, bool isSafe) async {
+  void _handleDataTap(BuildContext ctx, String raw, bool isSafe, String reportUrl) async {
     final urlString = raw.startsWith(RegExp(r'https?://')) ? raw : 'https://$raw';
     final uri = Uri.tryParse(urlString);
     if (uri == null || !uri.isAbsolute) {
@@ -40,21 +41,34 @@ class _HistoryScreenState extends State<HistoryScreen> {
     if (isSafe) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     } else {
-      _showWarningDialog(ctx, uri.toString());
+      _showWarningDialog(ctx, uri.toString(), reportUrl);
     }
   }
 
-  void _showWarningDialog(BuildContext ctx, String url) {
+  void _showWarningDialog(BuildContext ctx, String url, String reportUrl) {
     showDialog(
       context: ctx,
       builder: (c) => AlertDialog(
         title: const Text("Warning!"),
-        content: const Text("This URL has been flagged malicious. Proceed?"),
+        content: const Text("This URL has been flagged malicious. Proceed or view the report?"),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(c).pop(),
             child: const Text("Cancel", style: TextStyle(color: Colors.red)),
           ),
+          if (reportUrl.isNotEmpty)
+            TextButton(
+              onPressed: () {
+                Navigator.of(c).pop();
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ViewPdfScreen(fileUrl: reportUrl),
+                  ),
+                );
+              },
+              child: const Text("View Report"),
+            ),
           TextButton(
             onPressed: () {
               Navigator.of(c).pop();
@@ -70,7 +84,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Future<void> _pickDateRange() async {
     final picked = await showDateRangePicker(
       context: context,
-      firstDate: DateTime(2020),
+      firstDate: DateTime(2022),
       lastDate: DateTime.now(),
     );
     if (picked != null) {
@@ -85,30 +99,25 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     if (selectedDateRange != null) {
       final startTs = Timestamp.fromDate(selectedDateRange!.start);
-      final endTs = Timestamp.fromDate(
-        selectedDateRange!.end.add(const Duration(days: 1)),
-      );
-      query = query
-          .where('timestamp', isGreaterThanOrEqualTo: startTs, isLessThan: endTs);
-    }
-    if (filterOption == 'Safe') {
-      query = query.where('isSafe', isEqualTo: true);
-    } else if (filterOption == 'Malicious') {
-      query = query.where('isSafe', isEqualTo: false);
+      final endTs = Timestamp.fromDate(selectedDateRange!.end.add(const Duration(days: 1)));
+      query = query.where('timestamp', isGreaterThanOrEqualTo: startTs, isLessThan: endTs);
     }
 
     final snap = await query.get();
     final rows = <List<String>>[
-      ['Code', 'Safe', 'Timestamp'],
+      ['Code', 'Type', 'Safe', 'Report', 'Timestamp'],
       ...snap.docs.map((d) {
         final m = d.data() as Map<String, dynamic>;
         return [
           m['code'] ?? '',
-          (m['isSafe'] as bool).toString(),
-          m['timestamp']?.toDate().toString() ?? '',
+          m['type'] ?? '',
+          (m['isSafe'] as bool? ?? false).toString(),
+          m['reportUrl'] ?? '',
+          (m['timestamp'] as Timestamp?)?.toDate().toString() ?? '',
         ];
-      })
+      }),
     ];
+
     final csv = const ListToCsvConverter().convert(rows);
     final dir = await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/scan_history.csv');
@@ -124,24 +133,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
         .collection('scanHistory')
         .where('userId', isEqualTo: _user?.uid);
 
-    // apply date filter
     if (selectedDateRange != null) {
       final startTs = Timestamp.fromDate(selectedDateRange!.start);
-      final endTs = Timestamp.fromDate(
-        selectedDateRange!.end.add(const Duration(days: 1)),
-      );
-      query = query
-          .where('timestamp', isGreaterThanOrEqualTo: startTs, isLessThan: endTs);
+      final endTs = Timestamp.fromDate(selectedDateRange!.end.add(const Duration(days: 1)));
+      query = query.where('timestamp', isGreaterThanOrEqualTo: startTs, isLessThan: endTs);
     }
 
-    // apply safety filter
     if (filterOption == 'Safe') {
       query = query.where('isSafe', isEqualTo: true);
     } else if (filterOption == 'Malicious') {
       query = query.where('isSafe', isEqualTo: false);
     }
 
-    // order last
     query = query.orderBy('timestamp', descending: true);
 
     return Scaffold(
@@ -154,11 +157,24 @@ class _HistoryScreenState extends State<HistoryScreen> {
           IconButton(
             icon: const Icon(Icons.delete_forever),
             onPressed: () async {
-              final all = await FirebaseFirestore.instance
-                  .collection('scanHistory')
-                  .where('userId', isEqualTo: _user?.uid)
-                  .get();
-              for (var d in all.docs) await d.reference.delete();
+              final confirm = await showDialog(
+                context: context,
+                builder: (_) => AlertDialog(
+                  title: const Text("Clear All History"),
+                  content: const Text("Are you sure you want to delete all scan history?"),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
+                    TextButton(onPressed: () => Navigator.pop(context, true), child: const Text("Delete All")),
+                  ],
+                ),
+              );
+              if (confirm == true) {
+                final all = await FirebaseFirestore.instance
+                    .collection('scanHistory')
+                    .where('userId', isEqualTo: _user?.uid)
+                    .get();
+                for (var d in all.docs) await d.reference.delete();
+              }
             },
           ),
         ],
@@ -180,54 +196,64 @@ class _HistoryScreenState extends State<HistoryScreen> {
               Padding(padding: EdgeInsets.all(8), child: Text('Malicious')),
             ],
           ),
+          const SizedBox(height: 8),
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: query.snapshots(),
               builder: (_, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                final docs = snap.data?.docs ?? [];
-                if (docs.isEmpty) {
-                  return const Center(child: Text("No entries found"));
-                }
+                if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+                final docs = snap.data!.docs;
+                if (docs.isEmpty) return const Center(child: Text("No history found."));
                 return ListView.builder(
                   itemCount: docs.length,
                   itemBuilder: (_, idx) {
                     final m = docs[idx].data() as Map<String, dynamic>;
                     final code = m['code'] as String? ?? '';
                     final isSafe = m['isSafe'] as bool? ?? false;
+                    final type = m['type'] ?? 'Unknown';
+                    final ts = (m['timestamp'] as Timestamp?)?.toDate();
+                    final reportUrl = m['reportUrl'] ?? '';
+
                     return Card(
-                      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       child: ListTile(
                         leading: Icon(
-                          isSafe ? Icons.check_circle : Icons.warning,
+                          isSafe ? Icons.verified_user : Icons.warning_amber,
                           color: isSafe ? Colors.green : Colors.red,
                         ),
-                        title: Text(code),
-                        subtitle: Text(m['timestamp']?.toDate().toString() ?? ''),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
+                        title: Text(code, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text('Type: $type\nTime: ${ts?.toLocal().toString() ?? "N/A"}'),
+                        isThreeLine: true,
+                        trailing: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            IconButton(
-                              icon: const Icon(Icons.open_in_browser),
-                              onPressed: () => _handleDataTap(context, code, isSafe),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.copy),
-                              onPressed: () {
-                                Clipboard.setData(ClipboardData(text: code));
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text("Copied to clipboard")),
-                                );
-                              },
-                            ),
+                            if (reportUrl.isNotEmpty)
+                              IconButton(
+                                icon: const Icon(Icons.picture_as_pdf),
+                                onPressed: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => ViewPdfScreen(fileUrl: reportUrl),
+                                    ),
+                                  );
+                                },
+                                tooltip: "View Report",
+                              ),
                             IconButton(
                               icon: const Icon(Icons.delete, color: Colors.red),
                               onPressed: () => deleteHistory(docs[idx].id),
+                              tooltip: "Delete Entry",
                             ),
                           ],
                         ),
+                        onTap: () => _handleDataTap(context, code, isSafe, reportUrl),
+                        onLongPress: () {
+                          Clipboard.setData(ClipboardData(text: code));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text("Copied to clipboard")),
+                          );
+                        },
                       ),
                     );
                   },

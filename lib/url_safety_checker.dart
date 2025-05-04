@@ -12,26 +12,47 @@ class UrlSafetyChecker {
 
   final OfflineUrlChecker offlineChecker = OfflineUrlChecker();
 
-  Future<Map<String, dynamic>> checkFullReport(String url) async {
+  Future<Map<String, dynamic>> checkOfflineOnly(String data, {String? type}) async {
+    final heuristics = offlineChecker.analyze(data);
+    final triggers = heuristics['triggers'] ?? [];
+    final score = triggers.isEmpty ? 0.0 : (10 + triggers.length * 5).clamp(10.0, 50.0);
+
+    return {
+      'heuristic': heuristics,
+      'final_score': score,
+      'isSafe': score < 30,
+      'finalVerdict': score < 30
+          ? 'Likely Safe — No major red flags.'
+          : 'Potentially Unsafe — Offline analysis detected issues.'
+    };
+  }
+
+  Future<Map<String, dynamic>> checkFullReport(String raw) async {
     final result = <String, dynamic>{};
+
+    final type = _detectType(raw);
+    final bool isUrl = raw.startsWith('http');
+
+    if (!isUrl) {
+      return await checkOfflineOnly(raw, type: type);
+    }
+
+    // Proceed with full URL checks
     double totalScore = 0.0;
 
-    // Heuristic Check
-    final heur = offlineChecker.analyze(url);
+    final heur = offlineChecker.analyze(raw);
     final heurScore = heur['triggers'].isNotEmpty ? 20.0 : 0.0;
     totalScore += heurScore;
     result['heuristic'] = heur;
 
-    // Google Safe Browsing
-    final google = await _checkWithGoogleSafeBrowsing(url);
+    final google = await _checkWithGoogleSafeBrowsing(raw);
     final googleScore = google['matches'].isNotEmpty ? 20.0 : 0.0;
     totalScore += googleScore;
     result['google_safe'] = google['isSafe'];
     result['google_matches'] = google['matches'];
     result['google_message'] = google['message'];
 
-    // VirusTotal
-    final vt = await _checkWithVirusTotal(url);
+    final vt = await _checkWithVirusTotal(raw);
     final vtScore = vt['malicious'] + vt['suspicious'] > 0 ? 30.0 : 0.0;
     totalScore += vtScore;
     result['vt_safe'] = vt['isSafe'];
@@ -40,21 +61,18 @@ class UrlSafetyChecker {
     result['vt_total'] = vt['total'];
     result['vt_message'] = vt['message'];
 
-    // OpenPhish
-    final op = await _checkWithPhishTank(url);
+    final op = await _checkWithPhishTank(raw);
     final phishScore = !op['isSafe'] ? 10.0 : 0.0;
     totalScore += phishScore;
     result['phish_safe'] = op['isSafe'];
     result['phish_message'] = op['message'];
 
-    // IPQualityScore
-    final ipq = await _checkWithIPQualityScore(url);
+    final ipq = await _checkWithIPQualityScore(raw);
     final ipqScore = ipq['risk_score'] >= 75 ? 20.0 : (ipq['risk_score'] >= 40 ? 10.0 : 0.0);
     totalScore += ipqScore;
     result['ipq'] = ipq;
 
-    // urlscan.io
-    final scan = await _checkWithUrlScan(url);
+    final scan = await _checkWithUrlScan(raw);
     result['scan_status'] = scan['status'];
     result['scan_result'] = scan['result_url'];
     result['scan_screenshot'] = scan['screenshot_url'];
@@ -78,8 +96,10 @@ class UrlSafetyChecker {
         'client': {'clientId': 'qrshield', 'clientVersion': '1.0.0'},
         'threatInfo': {
           'threatTypes': [
-            'MALWARE', 'SOCIAL_ENGINEERING',
-            'POTENTIALLY_HARMFUL_APPLICATION', 'UNWANTED_SOFTWARE'
+            'MALWARE',
+            'SOCIAL_ENGINEERING',
+            'POTENTIALLY_HARMFUL_APPLICATION',
+            'UNWANTED_SOFTWARE'
           ],
           'platformTypes': ['ANY_PLATFORM'],
           'threatEntryTypes': ['URL'],
@@ -87,12 +107,13 @@ class UrlSafetyChecker {
         },
       }),
     );
+
     final data = jsonDecode(response.body);
     final matches = List<Map<String, dynamic>>.from(data['matches'] ?? []);
     return {
       'isSafe': matches.isEmpty,
       'matches': matches.map((m) => m['threatType']).toList(),
-      'message': matches.isEmpty ? 'No threats found.' : 'Google flagged this as potentially harmful.'
+      'message': matches.isEmpty ? 'No threats found.' : 'Google flagged this as potentially harmful.',
     };
   }
 
@@ -106,7 +127,9 @@ class UrlSafetyChecker {
       'isSafe': (stats['malicious'] ?? 0) == 0 && (stats['suspicious'] ?? 0) == 0,
       'malicious': stats['malicious'] ?? 0,
       'suspicious': stats['suspicious'] ?? 0,
-      'total': (stats['harmless'] ?? 0) + (stats['malicious'] ?? 0) + (stats['suspicious'] ?? 0),
+      'total': (stats['harmless'] ?? 0) +
+          (stats['malicious'] ?? 0) +
+          (stats['suspicious'] ?? 0),
       'message': '${stats['malicious']} malicious, ${stats['suspicious']} suspicious engines.'
     };
   }
@@ -118,7 +141,9 @@ class UrlSafetyChecker {
       final found = lines.any((line) => url.contains(line.trim()));
       return {
         'isSafe': !found,
-        'message': found ? 'URL is listed in OpenPhish phishing feed.' : 'Not found in OpenPhish feed.'
+        'message': found
+            ? 'URL is listed in OpenPhish phishing feed.'
+            : 'Not found in OpenPhish feed.'
       };
     } catch (_) {
       return {
@@ -129,7 +154,8 @@ class UrlSafetyChecker {
   }
 
   Future<Map<String, dynamic>> _checkWithIPQualityScore(String url) async {
-    final uri = Uri.parse('https://ipqualityscore.com/api/json/url/$ipQualityApiKey/${Uri.encodeComponent(url)}');
+    final uri = Uri.parse(
+        'https://ipqualityscore.com/api/json/url/$ipQualityApiKey/${Uri.encodeComponent(url)}');
     final response = await http.get(uri);
     final data = jsonDecode(response.body);
     return {
@@ -139,7 +165,7 @@ class UrlSafetyChecker {
       'domain_rank': data['domain_rank'] ?? 0,
       'spamming': data['spamming'] ?? false,
       'suspicious': data['suspicious'] ?? false,
-      'message': 'Risk: ${data['risk_score']}, Malware: ${data['malware']}, Phishing: ${data['phishing']}'
+      'message': 'Risk: ${data['risk_score']}, Malware: ${data['malware']}, Phishing: ${data['phishing']}',
     };
   }
 
@@ -167,4 +193,14 @@ class UrlSafetyChecker {
       };
     }
   }
-} 
+
+  String _detectType(String data) {
+    final l = data.toLowerCase();
+    if (l.contains('wa.me') || l.contains('api.whatsapp.com/send')) return 'WhatsApp';
+    if (l.contains('forms.gle') || l.contains('docs.google.com/forms')) return 'Form';
+    if (data.startsWith('WIFI:')) return 'WiFi';
+    if (RegExp(r'^\+?[0-9]{6,15}$').hasMatch(data)) return 'Phone';
+    if (RegExp(r'^\w+@[\w\-]+\.\w{2,4}$').hasMatch(data)) return 'Email';
+    return 'Text';
+  }
+}

@@ -7,7 +7,6 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -45,14 +44,28 @@ class _ResultscreenState extends State<Resultscreen> {
 
   Future<Map<String, dynamic>> _initSafetyCheck() async {
     final checker = UrlSafetyChecker();
-    final result = await checker.checkFullReport(widget.code);
-    safetyResult = result;
-    await _saveScan(
-      isSafe: result['isSafe'] == true,
-      message: result['finalVerdict'] ?? 'Unknown',
-      reportUrl: null,
-    );
-    return result;
+    try {
+      final isOfflineType = ['WiFi', 'WhatsApp', 'Form', 'Phone', 'Email', 'Text'].contains(dataType);
+      final result = isOfflineType
+          ? await checker.checkOfflineOnly(widget.code, type: dataType)
+          : await checker.checkFullReport(widget.code);
+
+      safetyResult = result;
+
+      await _saveScan(
+        isSafe: result['isSafe'] == true,
+        message: result['finalVerdict'] ?? 'Unknown',
+        reportUrl: null,
+      );
+
+      return result;
+    } catch (e) {
+      return {
+        'isSafe': false,
+        'final_score': 100,
+        'finalVerdict': 'Scan Failed: $e',
+      };
+    }
   }
 
   Future<void> _saveScan({required bool isSafe, required String message, String? reportUrl}) async {
@@ -69,7 +82,7 @@ class _ResultscreenState extends State<Resultscreen> {
     });
   }
 
-  Future<void> _generatePdfReport() async {
+   Future<void> _generatePdfReport() async {
     if (safetyResult['isSafe'] == true) return;
 
     final user = FirebaseAuth.instance.currentUser;
@@ -166,14 +179,16 @@ class _ResultscreenState extends State<Resultscreen> {
     Navigator.push(context, MaterialPageRoute(builder: (_) => ViewPdfScreen(file: pdfFile!)));
   }
 
-  Future<void> _accessData() async {
+  Future<void> _accessOrCopyData() async {
     final raw = widget.code.trim();
     final uri = Uri.tryParse(raw.startsWith('http') ? raw : 'https://$raw');
-    if (uri != null && await canLaunchUrl(uri)) {
+    final isOpenable = ['URL', 'Form', 'WhatsApp'].contains(dataType);
+
+    if (isOpenable && uri != null && await canLaunchUrl(uri)) {
       await launchUrl(uri);
     } else {
-      Clipboard.setData(ClipboardData(text: raw));
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied')));
+      await Clipboard.setData(ClipboardData(text: raw));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
     }
   }
 
@@ -183,8 +198,8 @@ class _ResultscreenState extends State<Resultscreen> {
     if (l.contains('forms.gle') || l.contains('docs.google.com/forms')) return 'Form';
     if (l.startsWith('http')) return 'URL';
     if (data.startsWith('WIFI:')) return 'WiFi';
-    if (RegExp(r'^\+?[0-9]{6,15}\$').hasMatch(data)) return 'Phone';
-    if (RegExp(r'^\w+@[\w\-]+\.\w{2,4}\$').hasMatch(data)) return 'Email';
+    if (RegExp(r'^\+?[0-9]{6,15}$').hasMatch(data)) return 'Phone';
+    if (RegExp(r'^\w+@[\w\-]+\.\w{2,4}$').hasMatch(data)) return 'Email';
     return 'Text';
   }
 
@@ -224,7 +239,9 @@ class _ResultscreenState extends State<Resultscreen> {
         child: Column(children: [
           QrImageView(data: widget.code, size: 180),
           const SizedBox(height: 12),
-          Text('Type: $dataType'),
+          Text('Type: $dataType', style: const TextStyle(fontWeight: FontWeight.bold)),
+          Text('Data: ${widget.code}'),
+          const SizedBox(height: 8),
           ...wifiDetails.entries.map((e) => Text('${e.key}: ${e.value}')),
           ...whatsappDetails.entries.map((e) => Text('WhatsApp ${e.key}: ${e.value}')),
           const SizedBox(height: 12),
@@ -235,14 +252,21 @@ class _ResultscreenState extends State<Resultscreen> {
               final d = snap.data!;
               final safe = d['isSafe'] == true;
               final score = (d['final_score'] as num? ?? 0).toDouble();
+              final suggestion = safe
+                  ? 'You may proceed to access this data.'
+                  : '⚠️ Do not proceed. This QR code may be malicious.';
+
               return Column(children: [
                 Text(d['finalVerdict']?.toString() ?? '', style: TextStyle(color: safe ? Colors.green : Colors.red)),
                 LinearProgressIndicator(value: score / 100, color: safe ? Colors.green : Colors.red),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
+                Text(suggestion, style: const TextStyle(fontStyle: FontStyle.italic)),
+                const SizedBox(height: 12),
                 ElevatedButton.icon(
-                  onPressed: _accessData,
-                  icon: const Icon(Icons.open_in_browser),
-                  label: const Text('Open')),
+                  onPressed: _accessOrCopyData,
+                  icon: Icon(['URL', 'Form', 'WhatsApp'].contains(dataType) ? Icons.open_in_browser : Icons.copy),
+                  label: Text(['URL', 'Form', 'WhatsApp'].contains(dataType) ? 'Open Link' : 'Copy Data'),
+                ),
                 const SizedBox(height: 4),
                 if (!safe)
                   ElevatedButton.icon(
