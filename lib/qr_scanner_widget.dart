@@ -1,22 +1,21 @@
 // qr_scanner_widget.dart
-import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
-import 'web_qr_scanner.dart';
+
+import 'web_qr_scanner_stub.dart'
+    if (dart.library.html) 'web_qr_scanner.dart'; // conditional import
 
 class QrScannerWidget extends StatelessWidget {
   final Function(String) onScanned;
 
-  const QrScannerWidget({super.key, required this.onScanned}); // Use super.key
+  const QrScannerWidget({super.key, required this.onScanned});
 
   @override
   Widget build(BuildContext context) {
     if (kIsWeb) {
-      // Use the web QR scanner for web platforms
-      return WebQrScanner(onScanned: onScanned);
-    } else if (Platform.isAndroid || Platform.isIOS) {
-      // Use mobile scanner for Android and iOS platforms
+      return WebQrScanner(onScanned: onScanned); // from imported stub or web file
+    } else {
       return MobileScanner(
         onDetect: (BarcodeCapture capture) {
           for (final barcode in capture.barcodes) {
@@ -26,10 +25,6 @@ class QrScannerWidget extends StatelessWidget {
             }
           }
         },
-      );
-    } else {
-      return Center(
-        child: Text("QR scanning not supported on this platform."),
       );
     }
   }
