@@ -2,16 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:qrshield/screens/signin_screen.dart';
+
+import 'firebase_options.dart';
 import 'qr_scanner_widget.dart';
-import 'package:qrshield/utils/color_utils.dart';
-import 'firebase_options.dart'; 
+import 'package:qrshield/screens/signin_screen.dart';
+import 'package:qrshield/qrshield.dart';
+import 'utils/color_utils.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const QRShieldApp());
 }
 
@@ -53,39 +53,77 @@ class EntryPoint extends StatefulWidget {
 }
 
 class _EntryPointState extends State<EntryPoint> {
-  bool showScanner = false;
+  bool _loading = true;
+  bool _hasInternet = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkStartupConditions();
+  }
+
+  Future<void> _checkStartupConditions() async {
+    final connectivity = await Connectivity().checkConnectivity();
+    final hasInternet = connectivity != ConnectivityResult.none;
+    final user = FirebaseAuth.instance.currentUser;
+
+    setState(() {
+      _hasInternet = hasInternet;
+    });
+
+    if (user != null && hasInternet) {
+      // Online and logged in
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Qrshield()));
+    } else if (user != null && !hasInternet) {
+      // Offline but previously signed in
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Qrshield()));
+    } else if (!hasInternet) {
+      // Offline and not logged in
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const OfflineScanOnlyScreen()));
+    } else {
+      // Online but not signed in
+      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const SignInScreen()));
+    }
+
+    setState(() {
+      _loading = false;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('QRShield')),
+      backgroundColor: Colors.black,
       body: Center(
-        child: showScanner
-            ? QrScannerWidget(
-                onScanned: (data) {
-                  // Handle QR code data here
-                  setState(() => showScanner = false);
-                },
-              )
-            : Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  ElevatedButton(
-                    onPressed: () => setState(() => showScanner = true),
-                    child: const Text('Scan QR Code'),
-                  ),
-                  const SizedBox(height: 20),
-                  ElevatedButton(
-                    onPressed: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const SignInScreen()),
-                      );
-                    },
-                    child: const Text('Go to Sign In'),
-                  ),
-                ],
-              ),
+        child: _loading
+            ? const CircularProgressIndicator()
+            : const Text("Redirecting...", style: TextStyle(color: Colors.white)),
+      ),
+    );
+  }
+}
+
+class OfflineScanOnlyScreen extends StatelessWidget {
+  const OfflineScanOnlyScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Offline Scan Mode")),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text("You're offline. Sign in disabled.", style: TextStyle(fontSize: 16)),
+            const SizedBox(height: 16),
+            QrScannerWidget(
+              onScanned: (code) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Scanned: $code")));
+                // Offline scan handling
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
