@@ -1,20 +1,19 @@
-import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'firebase_options.dart';
-import 'qr_scanner_widget.dart';
 import 'screens/signin_screen.dart';
+import 'screens/pin_unlock_screen.dart';
+import 'pin_setup_screen.dart';
+import 'qr_scanner_widget.dart';
 import 'utils/color_utils.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   runApp(const QRShieldApp());
 }
 
@@ -57,39 +56,58 @@ class EntryPoint extends StatefulWidget {
 
 class _EntryPointState extends State<EntryPoint> {
   bool isOffline = false;
-  bool showScanner = false;
+  final _storage = const FlutterSecureStorage();
 
   @override
   void initState() {
     super.initState();
-    Connectivity().checkConnectivity().then((status) {
-      setState(() => isOffline = status == ConnectivityResult.none);
-    });
-
+    _checkConnectivity();
     Connectivity().onConnectivityChanged.listen((status) {
-      setState(() => isOffline = (status == ConnectivityResult.none));
+      setState(() => isOffline = status == ConnectivityResult.none);
     });
   }
 
-  Future<void> _handleScan(String data) async {
-    final prefs = await SharedPreferences.getInstance();
-    final scanList = prefs.getStringList('offline_scans') ?? [];
-    scanList.add(jsonEncode({
-      'code': data,
-      'timestamp': DateTime.now().toIso8601String(),
-    }));
-    await prefs.setStringList('offline_scans', scanList);
+  Future<void> _checkConnectivity() async {
+    final result = await Connectivity().checkConnectivity();
+    setState(() => isOffline = result == ConnectivityResult.none);
+  }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('QR Code saved locally')),
-    );
+  Future<void> _handleOnlineMode() async {
+    if (isOffline) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No internet connection. Cannot use Online Mode.')),
+      );
+      return;
+    }
+
+    final user = FirebaseAuth.instance.currentUser;
+    final savedPin = await _storage.read(key: 'user_pin');
+
+    if (user != null) {
+      if (savedPin == null) {
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const PinSetupScreen()));
+      } else {
+        Navigator.push(context, MaterialPageRoute(builder: (_) => const PinUnlockScreen()));
+      }
+    } else {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => const SignInScreen()));
+    }
+  }
+
+  Future<void> _handleOfflineMode() async {
+    final savedPin = await _storage.read(key: 'user_pin');
+    if (savedPin == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No offline user found. Please log in online once.')),
+      );
+      return;
+    }
+
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const PinUnlockScreen()));
   }
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-    final isLoggedIn = user != null;
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('QRShield'),
@@ -103,46 +121,20 @@ class _EntryPointState extends State<EntryPoint> {
         ],
       ),
       body: Center(
-        child: showScanner
-            ? QrScannerWidget(
-                onScanned: (data) {
-                  _handleScan(data);
-                  setState(() => showScanner = false);
-                },
-              )
-            : Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  ElevatedButton(
-                    onPressed: () {
-                      if (isOffline) {
-                        setState(() => showScanner = true);
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('This is only for offline usage.')),
-                        );
-                      }
-                    },
-                    child: const Text('Offline Version'),
-                  ),
-                  const SizedBox(height: 20),
-                  ElevatedButton(
-                    onPressed: () {
-                      if (isOffline) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('No internet connection. Cannot proceed to Online Version.')),
-                        );
-                      } else {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const SignInScreen()),
-                        );
-                      }
-                    },
-                    child: const Text('Online Version'),
-                  ),
-                ],
-              ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ElevatedButton(
+              onPressed: _handleOnlineMode,
+              child: const Text('Online Mode'),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: _handleOfflineMode,
+              child: const Text('Offline Mode'),
+            ),
+          ],
+        ),
       ),
     );
   }
