@@ -1,17 +1,20 @@
-import 'package:flutter/material.dart';
+import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'firebase_options.dart';
 import 'qr_scanner_widget.dart';
-import 'package:qrshield/screens/signin_screen.dart';
-import 'package:qrshield/qrshield.dart';
+import 'screens/signin_screen.dart';
 import 'utils/color_utils.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
   runApp(const QRShieldApp());
 }
 
@@ -25,7 +28,7 @@ class QRShieldApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: MaterialColor(
           hexStringToColor("#2E7D32").value,
-          <int, Color>{
+          {
             50: hexStringToColor("#E8F5E9"),
             100: hexStringToColor("#C8E6C9"),
             200: hexStringToColor("#A5D6A7"),
@@ -39,8 +42,8 @@ class QRShieldApp extends StatelessWidget {
           },
         ),
       ),
-      home: const EntryPoint(),
       debugShowCheckedModeBanner: false,
+      home: const EntryPoint(),
     );
   }
 }
@@ -53,77 +56,93 @@ class EntryPoint extends StatefulWidget {
 }
 
 class _EntryPointState extends State<EntryPoint> {
-  bool _loading = true;
-  bool _hasInternet = false;
+  bool isOffline = false;
+  bool showScanner = false;
 
   @override
   void initState() {
     super.initState();
-    _checkStartupConditions();
-  }
-
-  Future<void> _checkStartupConditions() async {
-    final connectivity = await Connectivity().checkConnectivity();
-    final hasInternet = connectivity != ConnectivityResult.none;
-    final user = FirebaseAuth.instance.currentUser;
-
-    setState(() {
-      _hasInternet = hasInternet;
+    Connectivity().checkConnectivity().then((status) {
+      setState(() => isOffline = status == ConnectivityResult.none);
     });
 
-    if (user != null && hasInternet) {
-      // Online and logged in
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Qrshield()));
-    } else if (user != null && !hasInternet) {
-      // Offline but previously signed in
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const Qrshield()));
-    } else if (!hasInternet) {
-      // Offline and not logged in
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const OfflineScanOnlyScreen()));
-    } else {
-      // Online but not signed in
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const SignInScreen()));
-    }
-
-    setState(() {
-      _loading = false;
+    Connectivity().onConnectivityChanged.listen((status) {
+      setState(() => isOffline = (status == ConnectivityResult.none));
     });
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Center(
-        child: _loading
-            ? const CircularProgressIndicator()
-            : const Text("Redirecting...", style: TextStyle(color: Colors.white)),
-      ),
+  Future<void> _handleScan(String data) async {
+    final prefs = await SharedPreferences.getInstance();
+    final scanList = prefs.getStringList('offline_scans') ?? [];
+    scanList.add(jsonEncode({
+      'code': data,
+      'timestamp': DateTime.now().toIso8601String(),
+    }));
+    await prefs.setStringList('offline_scans', scanList);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('QR Code saved locally')),
     );
   }
-}
-
-class OfflineScanOnlyScreen extends StatelessWidget {
-  const OfflineScanOnlyScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+    final isLoggedIn = user != null;
+
     return Scaffold(
-      appBar: AppBar(title: const Text("Offline Scan Mode")),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Text("You're offline. Sign in disabled.", style: TextStyle(fontSize: 16)),
-            const SizedBox(height: 16),
-            QrScannerWidget(
-              onScanned: (code) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Scanned: $code")));
-                // Offline scan handling
-              },
+      appBar: AppBar(
+        title: const Text('QRShield'),
+        backgroundColor: isOffline ? Colors.red : null,
+        actions: [
+          if (isOffline)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: Center(child: Text("Offline Mode")),
             ),
-          ],
-        ),
+        ],
+      ),
+      body: Center(
+        child: showScanner
+            ? QrScannerWidget(
+                onScanned: (data) {
+                  _handleScan(data);
+                  setState(() => showScanner = false);
+                },
+              )
+            : Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton(
+                    onPressed: () {
+                      if (isOffline) {
+                        setState(() => showScanner = true);
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('This is only for offline usage.')),
+                        );
+                      }
+                    },
+                    child: const Text('Offline Version'),
+                  ),
+                  const SizedBox(height: 20),
+                  ElevatedButton(
+                    onPressed: () {
+                      if (isOffline) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('No internet connection. Cannot proceed to Online Version.')),
+                        );
+                      } else {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const SignInScreen()),
+                        );
+                      }
+                    },
+                    child: const Text('Online Version'),
+                  ),
+                ],
+              ),
       ),
     );
   }
