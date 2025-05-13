@@ -6,7 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:csv/csv.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import '../view_pdf_screen.dart';
+import '../main.dart'; // For returning to EntryPoint
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({Key? key}) : super(key: key);
@@ -18,6 +20,21 @@ class _HistoryScreenState extends State<HistoryScreen> {
   DateTimeRange? selectedDateRange;
   String filterOption = 'All';
   final _user = FirebaseAuth.instance.currentUser;
+  bool _isOffline = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkConnectivity();
+    Connectivity().onConnectivityChanged.listen((status) {
+      setState(() => _isOffline = status == ConnectivityResult.none);
+    });
+  }
+
+  Future<void> _checkConnectivity() async {
+    final result = await Connectivity().checkConnectivity();
+    setState(() => _isOffline = result == ConnectivityResult.none);
+  }
 
   Future<void> deleteHistory(String docId) async {
     await FirebaseFirestore.instance.collection('scanHistory').doc(docId).delete();
@@ -129,6 +146,37 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isOffline) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.wifi_off, color: Colors.white54, size: 60),
+              const SizedBox(height: 20),
+              const Text(
+                "You're offline. History is not available.",
+                style: TextStyle(color: Colors.white70, fontSize: 16),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () {
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (_) => const EntryPoint()),
+                    (route) => false,
+                  );
+                },
+                label: const Text("Return to Main Screen"),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     var query = FirebaseFirestore.instance
         .collection('scanHistory')
         .where('userId', isEqualTo: _user?.uid);

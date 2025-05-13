@@ -1,19 +1,26 @@
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'firebase_options.dart';
 import 'screens/signin_screen.dart';
+import 'screens/pin_setup_screen.dart';
 import 'screens/pin_unlock_screen.dart';
-import 'pin_setup_screen.dart';
-import 'qr_scanner_widget.dart';
 import 'utils/color_utils.dart';
+import 'utils/offline_sync_service.dart';
+import 'utils/urlhaus_blacklist_loader.dart';
+
+late UrlHausBlacklistLoader blacklistLoader;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // Load URLHaus blacklist from assets
+  blacklistLoader = UrlHausBlacklistLoader();
+  await blacklistLoader.loadFromAssets();
+
   runApp(const QRShieldApp());
 }
 
@@ -56,54 +63,45 @@ class EntryPoint extends StatefulWidget {
 
 class _EntryPointState extends State<EntryPoint> {
   bool isOffline = false;
-  final _storage = const FlutterSecureStorage();
+  final OfflineSyncService _syncService = OfflineSyncService();
 
   @override
   void initState() {
     super.initState();
     _checkConnectivity();
-    Connectivity().onConnectivityChanged.listen((status) {
-      setState(() => isOffline = status == ConnectivityResult.none);
+
+    Connectivity().onConnectivityChanged.listen((status) async {
+      final nowOffline = status == ConnectivityResult.none;
+      setState(() => isOffline = nowOffline);
+
+      if (!nowOffline) {
+        await _syncService.syncOfflineScans(); // Trigger sync on reconnect
+      }
     });
   }
 
   Future<void> _checkConnectivity() async {
     final result = await Connectivity().checkConnectivity();
-    setState(() => isOffline = result == ConnectivityResult.none);
+    final nowOffline = result == ConnectivityResult.none;
+    setState(() => isOffline = nowOffline);
+
+    if (!nowOffline) {
+      await _syncService.syncOfflineScans(); // Also sync on app start if online
+    }
   }
 
-  Future<void> _handleOnlineMode() async {
+  void _handleOnlineMode() {
     if (isOffline) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('No internet connection. Cannot use Online Mode.')),
       );
       return;
     }
-
-    final user = FirebaseAuth.instance.currentUser;
-    final savedPin = await _storage.read(key: 'user_pin');
-
-    if (user != null) {
-      if (savedPin == null) {
-        Navigator.push(context, MaterialPageRoute(builder: (_) => const PinSetupScreen()));
-      } else {
-        Navigator.push(context, MaterialPageRoute(builder: (_) => const PinUnlockScreen()));
-      }
-    } else {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => const SignInScreen()));
-    }
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const SignInScreen()));
   }
 
-  Future<void> _handleOfflineMode() async {
-    final savedPin = await _storage.read(key: 'user_pin');
-    if (savedPin == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No offline user found. Please log in online once.')),
-      );
-      return;
-    }
-
-    Navigator.push(context, MaterialPageRoute(builder: (_) => const PinUnlockScreen()));
+  void _handleOfflineMode() {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => const OfflineLoginScreen()));
   }
 
   @override
@@ -132,6 +130,85 @@ class _EntryPointState extends State<EntryPoint> {
             ElevatedButton(
               onPressed: _handleOfflineMode,
               child: const Text('Offline Mode'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class OfflineLoginScreen extends StatefulWidget {
+  const OfflineLoginScreen({Key? key}) : super(key: key);
+
+  @override
+  State<OfflineLoginScreen> createState() => _OfflineLoginScreenState();
+}
+
+class _OfflineLoginScreenState extends State<OfflineLoginScreen> {
+  final TextEditingController _email = TextEditingController();
+  final TextEditingController _password = TextEditingController();
+  final _storage = const FlutterSecureStorage();
+
+  void _attemptLogin() async {
+    final email = _email.text.trim().toLowerCase();
+    final password = _password.text.trim();
+
+    if (email.isEmpty || password.isEmpty) {
+      _showSnack("Enter email and password.");
+      return;
+    }
+
+    final storedEmail = await _storage.read(key: 'email');
+    final storedPassword = await _storage.read(key: 'password');
+
+    if (storedEmail == email && storedPassword == password) {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PinUnlockScreen(email: email),
+        ),
+      );
+    } else {
+      _showSnack("Invalid credentials. Try again or log in online first.");
+    }
+  }
+
+  void _showSnack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Offline Login")),
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          children: [
+            const Text("Enter your credentials to unlock QRShield offline."),
+            const SizedBox(height: 20),
+            TextField(
+              controller: _email,
+              decoration: const InputDecoration(
+                labelText: "Email",
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _password,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: "Password",
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              icon: const Icon(Icons.login),
+              onPressed: _attemptLogin,
+              label: const Text("Continue to PIN"),
             ),
           ],
         ),

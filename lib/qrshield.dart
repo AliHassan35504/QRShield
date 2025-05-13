@@ -5,7 +5,12 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:qr_scanner_overlay/qr_scanner_overlay.dart';
 import 'package:qrshield/resultscreen.dart';
 import 'package:qrshield/screens/historyscreen.dart';
+import 'package:qrshield/screens/offline_history_screen.dart';
+import 'package:qrshield/screens/resultscreen_offline.dart';
 import 'package:qrshield/screens/signin_screen.dart';
+import 'package:qrshield/utils/offline_sync_service.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:qrshield/main.dart';
 
 const bgColor = Color.fromARGB(255, 18, 18, 18);
 
@@ -20,13 +25,25 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
   bool isScanCompleted = false;
   bool isFlashOn = false;
   bool isFrontCamera = false;
+  bool isOffline = false;
+
   final MobileScannerController controller = MobileScannerController();
+  final OfflineSyncService _syncService = OfflineSyncService();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _requestCameraPermission();
+    _checkConnectivity();
+
+    Connectivity().onConnectivityChanged.listen((status) async {
+      final connected = status != ConnectivityResult.none;
+      setState(() => isOffline = !connected);
+      if (connected) {
+        await _syncService.syncOfflineScans();
+      }
+    });
   }
 
   @override
@@ -40,9 +57,14 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
       controller.stop();
-    } else if (state == AppLifecycleState.resumed) {
+    } else if (state == AppLifecycleState.resumed && !isScanCompleted) {
       controller.start();
     }
+  }
+
+  Future<void> _checkConnectivity() async {
+    final result = await Connectivity().checkConnectivity();
+    setState(() => isOffline = result == ConnectivityResult.none);
   }
 
   Future<void> _requestCameraPermission() async {
@@ -64,10 +86,7 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
         title: const Text("Camera Permission Required"),
         content: const Text("Please enable camera permission to scan QR codes."),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancel"),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
           TextButton(
             onPressed: () {
               openAppSettings();
@@ -84,19 +103,16 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
     setState(() {
       isScanCompleted = false;
     });
+    controller.start(); // Restart scanning after closing result screen
   }
 
   void _toggleFlash() {
-    setState(() {
-      isFlashOn = !isFlashOn;
-    });
+    setState(() => isFlashOn = !isFlashOn);
     controller.toggleTorch();
   }
 
   void _switchCamera() {
-    setState(() {
-      isFrontCamera = !isFrontCamera;
-    });
+    setState(() => isFrontCamera = !isFrontCamera);
     controller.switchCamera();
   }
 
@@ -107,10 +123,7 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
         title: const Text("Logout"),
         content: const Text("Are you sure you want to logout?"),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancel"),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
           TextButton(
             onPressed: () {
               FirebaseAuth.instance.signOut().then((_) {
@@ -129,10 +142,28 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
   }
 
   void _openHistory() {
-    Navigator.push(
+    final screen = isOffline ? const OfflineHistoryScreen() : const HistoryScreen();
+    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+  }
+
+  void _returnToMain() {
+    Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(builder: (_) => const HistoryScreen()),
+      MaterialPageRoute(builder: (_) => const EntryPoint()),
+      (route) => false,
     );
+  }
+
+  void _handleQRCode(String code) {
+    if (isScanCompleted) return;
+    setState(() => isScanCompleted = true);
+    controller.stop();
+
+    final screen = isOffline
+        ? OfflineResultscreen(code: code, closeScreen: closeScreen)
+        : Resultscreen(code: code, closeScreen: closeScreen);
+
+    Navigator.push(context, MaterialPageRoute(builder: (_) => screen)).then((_) => closeScreen());
   }
 
   @override
@@ -140,16 +171,11 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
     return Scaffold(
       backgroundColor: bgColor,
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
+        backgroundColor: isOffline ? Colors.red : Colors.transparent,
         elevation: 0,
         title: const Text(
           "QRSHIELD",
-          style: TextStyle(
-            fontSize: 26,
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 1,
-          ),
+          style: TextStyle(fontSize: 26, color: Colors.white, fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
         actions: [
@@ -166,16 +192,22 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
       body: SafeArea(
         child: Column(
           children: [
+            if (isOffline)
+              Container(
+                width: double.infinity,
+                color: Colors.redAccent,
+                padding: const EdgeInsets.all(8),
+                child: const Center(
+                  child: Text(
+                    "You are offline. Some features are unavailable.",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ),
             const SizedBox(height: 10),
-            const Text(
-              "Align the QR code within the frame",
-              style: TextStyle(color: Colors.white, fontSize: 16),
-            ),
+            const Text("Align the QR code within the frame", style: TextStyle(color: Colors.white, fontSize: 16)),
             const SizedBox(height: 6),
-            const Text(
-              "Scanning will start automatically",
-              style: TextStyle(color: Colors.white70, fontSize: 14),
-            ),
+            const Text("Scanning will start automatically", style: TextStyle(color: Colors.white70, fontSize: 14)),
             const SizedBox(height: 20),
             Expanded(
               flex: 4,
@@ -190,18 +222,8 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
                         for (final barcode in capture.barcodes) {
                           final String? code = barcode.rawValue;
                           if (code != null) {
-                            setState(() {
-                              isScanCompleted = true;
-                            });
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => Resultscreen(
-                                  code: code,
-                                  closeScreen: closeScreen,
-                                ),
-                              ),
-                            ).then((_) => closeScreen());
+                            _handleQRCode(code);
+                            break;
                           }
                         }
                       }
@@ -218,8 +240,10 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
               ),
             ),
             const SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 16,
+              runSpacing: 12,
               children: [
                 ElevatedButton.icon(
                   onPressed: _openHistory,
@@ -228,7 +252,6 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.white,
                     foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                   ),
                 ),
                 ElevatedButton.icon(
@@ -238,16 +261,22 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.red,
                     foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                   ),
                 ),
+                if (isOffline)
+                  ElevatedButton.icon(
+                    onPressed: _returnToMain,
+                    icon: const Icon(Icons.home),
+                    label: const Text("Back to Main Screen"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.grey[800],
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 20),
-            const Text(
-              "Developed by Ali Hassan",
-              style: TextStyle(color: Colors.white54),
-            ),
+            const Text("Developed by Ali Hassan", style: TextStyle(color: Colors.white54)),
             const SizedBox(height: 10),
           ],
         ),

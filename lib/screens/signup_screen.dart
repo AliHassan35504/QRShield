@@ -1,7 +1,9 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:qrshield/screens/signin_screen.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:qrshield/screens/signin_screen.dart';
+import 'package:qrshield/screens/pin_setup_screen.dart';
+import '../main.dart'; // To return to EntryPoint
 
 class SignUpScreen extends StatefulWidget {
   const SignUpScreen({Key? key}) : super(key: key);
@@ -24,7 +26,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
   }
 
   void _monitorConnectivity() {
-    Connectivity().onConnectivityChanged.listen((ConnectivityResult result) {
+    Connectivity().onConnectivityChanged.listen((result) {
       setState(() => _isOffline = (result == ConnectivityResult.none));
     });
 
@@ -39,29 +41,23 @@ class _SignUpScreenState extends State<SignUpScreen> {
     });
   }
 
-  void _signUp() async {
+  Future<void> _signUp() async {
     if (_isOffline) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("No internet connection")),
-      );
+      _showSnack("No internet connection.");
       return;
     }
 
-    String username = _userNameController.text.trim();
-    String email = _emailController.text.trim();
-    String password = _passwordController.text.trim();
+    final username = _userNameController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
 
     if (username.isEmpty || email.isEmpty || password.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please fill all fields")),
-      );
+      _showSnack("Please fill all fields.");
       return;
     }
 
     if (password.length < 6) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Password must be at least 6 characters")),
-      );
+      _showSnack("Password must be at least 6 characters.");
       return;
     }
 
@@ -71,13 +67,10 @@ class _SignUpScreenState extends State<SignUpScreen> {
         password: password,
       );
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Account created successfully")),
-      );
-
+      _showSnack("Account created successfully.");
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (context) => const SignInScreen()),
+        MaterialPageRoute(builder: (_) => const PinSetupScreen()),
       );
     } on FirebaseAuthException catch (e) {
       String errorMessage = "Signup failed";
@@ -88,15 +81,48 @@ class _SignUpScreenState extends State<SignUpScreen> {
       } else if (e.code == 'weak-password') {
         errorMessage = "Password is too weak.";
       }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(errorMessage)),
-      );
+      _showSnack(errorMessage);
     }
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_isOffline) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text(
+                  "You're offline. Please connect to the internet to sign up.",
+                  style: TextStyle(color: Colors.white, fontSize: 18),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pushAndRemoveUntil(
+                      context,
+                      MaterialPageRoute(builder: (_) => const EntryPoint()),
+                      (route) => false,
+                    );
+                  },
+                  child: const Text("Return to Main Screen"),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -106,91 +132,74 @@ class _SignUpScreenState extends State<SignUpScreen> {
         iconTheme: const IconThemeData(color: Colors.white),
       ),
       body: SafeArea(
-        child: Column(
-          children: [
-            if (_isOffline)
-              Container(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          child: Column(
+            children: [
+              const SizedBox(height: 20),
+              TextField(
+                controller: _userNameController,
+                style: const TextStyle(color: Colors.white),
+                decoration: _buildInputDecoration("Username", Icons.person),
+              ),
+              const SizedBox(height: 20),
+              TextField(
+                controller: _emailController,
+                style: const TextStyle(color: Colors.white),
+                keyboardType: TextInputType.emailAddress,
+                decoration: _buildInputDecoration("Email", Icons.email),
+              ),
+              const SizedBox(height: 20),
+              TextField(
+                controller: _passwordController,
+                obscureText: _obscurePassword,
+                style: const TextStyle(color: Colors.white),
+                decoration: _buildInputDecoration("Password", Icons.lock).copyWith(
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                      color: Colors.white70,
+                    ),
+                    onPressed: _togglePasswordVisibility,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 30),
+              SizedBox(
                 width: double.infinity,
-                color: Colors.red,
-                padding: const EdgeInsets.all(8),
-                child: const Text(
-                  "You're offline. Connect to the internet to create an account.",
-                  style: TextStyle(color: Colors.white),
-                  textAlign: TextAlign.center,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: _signUp,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    "Sign Up",
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
                 ),
               ),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 20),
-                    TextField(
-                      controller: _userNameController,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: _buildInputDecoration("Username", Icons.person),
-                    ),
-                    const SizedBox(height: 20),
-                    TextField(
-                      controller: _emailController,
-                      style: const TextStyle(color: Colors.white),
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: _buildInputDecoration("Email", Icons.email),
-                    ),
-                    const SizedBox(height: 20),
-                    TextField(
-                      controller: _passwordController,
-                      obscureText: _obscurePassword,
-                      style: const TextStyle(color: Colors.white),
-                      decoration: _buildInputDecoration("Password", Icons.lock).copyWith(
-                        suffixIcon: IconButton(
-                          icon: Icon(
-                            _obscurePassword ? Icons.visibility_off : Icons.visibility,
-                            color: Colors.white70,
-                          ),
-                          onPressed: _togglePasswordVisibility,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 30),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: ElevatedButton(
-                        onPressed: _signUp,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.blue,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: const Text(
-                          "Sign Up",
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Text("Already have an account?", style: TextStyle(color: Colors.white70)),
-                        TextButton(
-                          onPressed: () {
-                            Navigator.pushReplacement(
-                              context,
-                              MaterialPageRoute(builder: (context) => const SignInScreen()),
-                            );
-                          },
-                          child: const Text("Sign In", style: TextStyle(color: Colors.blue)),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text("Already have an account?", style: TextStyle(color: Colors.white70)),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(builder: (_) => const SignInScreen()),
+                      );
+                    },
+                    child: const Text("Sign In", style: TextStyle(color: Colors.blue)),
+                  ),
+                ],
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

@@ -1,6 +1,7 @@
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import '../main.dart'; // For EntryPoint
 
 class ResetPassword extends StatefulWidget {
   const ResetPassword({Key? key}) : super(key: key);
@@ -21,9 +22,7 @@ class _ResetPasswordState extends State<ResetPassword> {
 
   Future<void> _checkConnectivity() async {
     final result = await Connectivity().checkConnectivity();
-    setState(() {
-      _isOffline = result == ConnectivityResult.none;
-    });
+    setState(() => _isOffline = result == ConnectivityResult.none);
   }
 
   Future<void> _resetPassword() async {
@@ -31,7 +30,7 @@ class _ResetPasswordState extends State<ResetPassword> {
     final email = _emailController.text.trim();
 
     if (_isOffline) {
-      _showSnack("No internet connection. Please connect and try again.");
+      _showSnack("No internet connection.");
       return;
     }
 
@@ -55,13 +54,43 @@ class _ResetPasswordState extends State<ResetPassword> {
   }
 
   void _showSnack(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_isOffline) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text(
+                  "You're offline. Please connect to the internet to reset your password.",
+                  style: TextStyle(color: Colors.white, fontSize: 18),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.pushAndRemoveUntil(
+                      context,
+                      MaterialPageRoute(builder: (_) => const EntryPoint()),
+                      (route) => false,
+                    );
+                  },
+                  child: const Text("Return to Main Screen"),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -74,24 +103,7 @@ class _ResetPasswordState extends State<ResetPassword> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (_isOffline)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                margin: const EdgeInsets.only(bottom: 12),
-                decoration: BoxDecoration(
-                  color: Colors.red.shade700,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Text(
-                  "You're offline. Connect to the internet to continue.",
-                  style: TextStyle(color: Colors.white),
-                ),
-              ),
-            const Text(
-              "Enter your email to reset your password",
-              style: TextStyle(color: Colors.white70),
-            ),
+            const Text("Enter your email to reset your password", style: TextStyle(color: Colors.white70)),
             const SizedBox(height: 20),
             TextField(
               controller: _emailController,
@@ -101,11 +113,11 @@ class _ResetPasswordState extends State<ResetPassword> {
                 labelStyle: const TextStyle(color: Colors.white70),
                 prefixIcon: const Icon(Icons.email, color: Colors.white70),
                 enabledBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.white24),
+                  borderSide: const BorderSide(color: Colors.white24),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 focusedBorder: OutlineInputBorder(
-                  borderSide: BorderSide(color: Colors.blue),
+                  borderSide: const BorderSide(color: Colors.blue),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 fillColor: Colors.white10,
@@ -125,10 +137,7 @@ class _ResetPasswordState extends State<ResetPassword> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                 ),
-                child: const Text(
-                  "Reset Password",
-                  style: TextStyle(fontSize: 16, color: Colors.white),
-                ),
+                child: const Text("Reset Password", style: TextStyle(fontSize: 16)),
               ),
             ),
           ],
