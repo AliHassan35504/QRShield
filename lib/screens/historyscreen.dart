@@ -8,7 +8,7 @@ import 'package:csv/csv.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import '../view_pdf_screen.dart';
-import '../main.dart'; // For returning to EntryPoint
+import '../main.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({Key? key}) : super(key: key);
@@ -44,15 +44,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final urlString = raw.startsWith(RegExp(r'https?://')) ? raw : 'https://$raw';
     final uri = Uri.tryParse(urlString);
     if (uri == null || !uri.isAbsolute) {
-      ScaffoldMessenger.of(ctx).showSnackBar(
-        const SnackBar(content: Text("Invalid URL.")),
-      );
+      ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text("Invalid URL.")));
       return;
     }
     if (!await canLaunchUrl(uri)) {
-      ScaffoldMessenger.of(ctx).showSnackBar(
-        const SnackBar(content: Text("Cannot open the link.")),
-      );
+      ScaffoldMessenger.of(ctx).showSnackBar(const SnackBar(content: Text("Cannot open the link.")));
       return;
     }
     if (isSafe) {
@@ -69,20 +65,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
         title: const Text("Warning!"),
         content: const Text("This URL has been flagged malicious. Proceed or view the report?"),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(c).pop(),
-            child: const Text("Cancel", style: TextStyle(color: Colors.red)),
-          ),
+          TextButton(onPressed: () => Navigator.of(c).pop(), child: const Text("Cancel", style: TextStyle(color: Colors.red))),
           if (reportUrl.isNotEmpty)
             TextButton(
               onPressed: () {
                 Navigator.of(c).pop();
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ViewPdfScreen(fileUrl: reportUrl),
-                  ),
-                );
+                Navigator.push(context, MaterialPageRoute(builder: (_) => ViewPdfScreen(fileUrl: reportUrl)));
               },
               child: const Text("View Report"),
             ),
@@ -104,9 +92,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       firstDate: DateTime(2022),
       lastDate: DateTime.now(),
     );
-    if (picked != null) {
-      setState(() => selectedDateRange = picked);
-    }
+    if (picked != null) setState(() => selectedDateRange = picked);
   }
 
   Future<void> _exportToCSV() async {
@@ -139,9 +125,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final dir = await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/scan_history.csv');
     await file.writeAsString(csv);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Exported to ${file.path}")),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Exported to ${file.path}")));
   }
 
   @override
@@ -155,10 +139,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             children: [
               const Icon(Icons.wifi_off, color: Colors.white54, size: 60),
               const SizedBox(height: 20),
-              const Text(
-                "You're offline. History is not available.",
-                style: TextStyle(color: Colors.white70, fontSize: 16),
-              ),
+              const Text("You're offline. History is not available.", style: TextStyle(color: Colors.white70)),
               const SizedBox(height: 20),
               ElevatedButton.icon(
                 icon: const Icon(Icons.arrow_back),
@@ -261,6 +242,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     final type = m['type'] ?? 'Unknown';
                     final ts = (m['timestamp'] as Timestamp?)?.toDate();
                     final reportUrl = m['reportUrl'] ?? '';
+                    final isOffline = m['source'] == 'offline';
 
                     return Card(
                       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -270,28 +252,36 @@ class _HistoryScreenState extends State<HistoryScreen> {
                           color: isSafe ? Colors.green : Colors.red,
                         ),
                         title: Text(code, maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Text('Type: $type\nTime: ${ts?.toLocal().toString() ?? "N/A"}'),
-                        isThreeLine: true,
-                        trailing: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            if (reportUrl.isNotEmpty)
+                            Text('Type: $type\nTime: ${ts?.toLocal().toString() ?? "N/A"}'),
+                            if (isOffline)
+                              const Padding(
+                                padding: EdgeInsets.only(top: 4),
+                                child: Text("[OFFLINE]", style: TextStyle(color: Colors.orange, fontSize: 12)),
+                              ),
+                          ],
+                        ),
+                        isThreeLine: true,
+                        trailing: Wrap(
+                          spacing: 4,
+                          children: [
+                            if (!isSafe && reportUrl.isNotEmpty)
                               IconButton(
                                 icon: const Icon(Icons.picture_as_pdf),
+                                tooltip: "View Report",
                                 onPressed: () {
                                   Navigator.push(
                                     context,
-                                    MaterialPageRoute(
-                                      builder: (_) => ViewPdfScreen(fileUrl: reportUrl),
-                                    ),
+                                    MaterialPageRoute(builder: (_) => ViewPdfScreen(fileUrl: reportUrl)),
                                   );
                                 },
-                                tooltip: "View Report",
                               ),
                             IconButton(
                               icon: const Icon(Icons.delete, color: Colors.red),
-                              onPressed: () => deleteHistory(docs[idx].id),
                               tooltip: "Delete Entry",
+                              onPressed: () => deleteHistory(docs[idx].id),
                             ),
                           ],
                         ),

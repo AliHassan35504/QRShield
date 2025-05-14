@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -63,31 +64,19 @@ class EntryPoint extends StatefulWidget {
 
 class _EntryPointState extends State<EntryPoint> {
   bool isOffline = false;
-  final OfflineSyncService _syncService = OfflineSyncService();
 
   @override
   void initState() {
     super.initState();
     _checkConnectivity();
-
-    Connectivity().onConnectivityChanged.listen((status) async {
-      final nowOffline = status == ConnectivityResult.none;
-      setState(() => isOffline = nowOffline);
-
-      if (!nowOffline) {
-        await _syncService.syncOfflineScans(); // Trigger sync on reconnect
-      }
+    Connectivity().onConnectivityChanged.listen((status) {
+      setState(() => isOffline = status == ConnectivityResult.none);
     });
   }
 
   Future<void> _checkConnectivity() async {
     final result = await Connectivity().checkConnectivity();
-    final nowOffline = result == ConnectivityResult.none;
-    setState(() => isOffline = nowOffline);
-
-    if (!nowOffline) {
-      await _syncService.syncOfflineScans(); // Also sync on app start if online
-    }
+    setState(() => isOffline = result == ConnectivityResult.none);
   }
 
   void _handleOnlineMode() {
@@ -107,6 +96,7 @@ class _EntryPointState extends State<EntryPoint> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.grey.shade100,
       appBar: AppBar(
         title: const Text('QRShield'),
         backgroundColor: isOffline ? Colors.red : null,
@@ -118,21 +108,52 @@ class _EntryPointState extends State<EntryPoint> {
             ),
         ],
       ),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ElevatedButton(
-              onPressed: _handleOnlineMode,
-              child: const Text('Online Mode'),
+      body: Column(
+        children: [
+          const SizedBox(height: 40),
+          const Icon(Icons.qr_code_scanner, size: 90, color: Colors.green),
+          const SizedBox(height: 12),
+          const Text(
+            "QRShield Security Scanner",
+            style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12, horizontal: 24),
+            child: Text(
+              "Select a mode to begin. Online mode enables full scanning and sync. Offline mode allows secure access without internet.",
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 14),
             ),
-            const SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _handleOfflineMode,
-              child: const Text('Offline Mode'),
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 24),
+          Wrap(
+            spacing: 16,
+            runSpacing: 16,
+            alignment: WrapAlignment.center,
+            children: [
+              ElevatedButton.icon(
+                onPressed: _handleOnlineMode,
+                icon: const Icon(Icons.cloud_done),
+                label: const Text('Online Mode'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                ),
+              ),
+              ElevatedButton.icon(
+                onPressed: _handleOfflineMode,
+                icon: const Icon(Icons.wifi_off),
+                label: const Text('Offline Mode'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.grey[800],
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 40),
+          const Text("Developed by Ali Hassan", style: TextStyle(color: Colors.black54)),
+        ],
       ),
     );
   }
@@ -165,9 +186,7 @@ class _OfflineLoginScreenState extends State<OfflineLoginScreen> {
     if (storedEmail == email && storedPassword == password) {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(
-          builder: (_) => PinUnlockScreen(email: email),
-        ),
+        MaterialPageRoute(builder: (_) => PinUnlockScreen(email: email)),
       );
     } else {
       _showSnack("Invalid credentials. Try again or log in online first.");

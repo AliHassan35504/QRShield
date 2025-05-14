@@ -1,3 +1,5 @@
+// qrshield.dart
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -8,9 +10,10 @@ import 'package:qrshield/screens/historyscreen.dart';
 import 'package:qrshield/screens/offline_history_screen.dart';
 import 'package:qrshield/screens/resultscreen_offline.dart';
 import 'package:qrshield/screens/signin_screen.dart';
+import 'package:qrshield/main.dart';
 import 'package:qrshield/utils/offline_sync_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:qrshield/main.dart';
+import 'package:intl/intl.dart';
 
 const bgColor = Color.fromARGB(255, 18, 18, 18);
 
@@ -37,12 +40,8 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
     _requestCameraPermission();
     _checkConnectivity();
 
-    Connectivity().onConnectivityChanged.listen((status) async {
-      final connected = status != ConnectivityResult.none;
-      setState(() => isOffline = !connected);
-      if (connected) {
-        await _syncService.syncOfflineScans();
-      }
+    Connectivity().onConnectivityChanged.listen((status) {
+      setState(() => isOffline = status == ConnectivityResult.none);
     });
   }
 
@@ -100,10 +99,8 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
   }
 
   void closeScreen() {
-    setState(() {
-      isScanCompleted = false;
-    });
-    controller.start(); // Restart scanning after closing result screen
+    setState(() => isScanCompleted = false);
+    controller.start();
   }
 
   void _toggleFlash() {
@@ -117,28 +114,67 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
   }
 
   void _confirmLogout() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text("Logout"),
-        content: const Text("Are you sure you want to logout?"),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
-          TextButton(
-            onPressed: () {
-              FirebaseAuth.instance.signOut().then((_) {
-                Navigator.pushAndRemoveUntil(
-                  context,
-                  MaterialPageRoute(builder: (_) => const SignInScreen()),
-                  (route) => false,
-                );
-              });
-            },
-            child: const Text("Logout"),
+    if (_syncService.isSyncing) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => AlertDialog(
+          title: const Text("Sync in Progress"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Text("QRShield is currently syncing data to the cloud."),
+              SizedBox(height: 12),
+              LinearProgressIndicator(),
+              SizedBox(height: 8),
+              Text("Do you want to stop syncing and logout?"),
+            ],
           ),
-        ],
-      ),
-    );
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("Wait"),
+            ),
+            TextButton(
+              onPressed: () {
+                _syncService.cancel();
+                FirebaseAuth.instance.signOut().then((_) {
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (_) => const EntryPoint()),
+                    (route) => false,
+                  );
+                });
+              },
+              child: const Text("Logout Anyway"),
+            ),
+          ],
+        ),
+      );
+    } else {
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text("Logout"),
+          content: const Text("Are you sure you want to logout?"),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+            TextButton(
+              onPressed: () {
+                FirebaseAuth.instance.signOut().then((_) {
+                  Navigator.pushAndRemoveUntil(
+                    context,
+                    MaterialPageRoute(builder: (_) => const EntryPoint()),
+                    (route) => false,
+                  );
+                });
+              },
+              child: const Text("Logout"),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   void _openHistory() {
@@ -198,10 +234,7 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
                 color: Colors.redAccent,
                 padding: const EdgeInsets.all(8),
                 child: const Center(
-                  child: Text(
-                    "You are offline. Some features are unavailable.",
-                    style: TextStyle(color: Colors.white),
-                  ),
+                  child: Text("You are offline. Some features are unavailable.", style: TextStyle(color: Colors.white)),
                 ),
               ),
             const SizedBox(height: 10),
@@ -273,9 +306,46 @@ class _QrshieldState extends State<Qrshield> with WidgetsBindingObserver {
                       foregroundColor: Colors.white,
                     ),
                   ),
+                if (!isOffline)
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.sync),
+                    label: const Text("Sync Now"),
+                    onPressed: () async {
+                      final scaffold = ScaffoldMessenger.of(context);
+                      int totalSynced = 0, failed = 0;
+
+                      await _syncService.syncOfflineScans(
+                        onStart: (count) {
+                          scaffold.showSnackBar(
+                            SnackBar(content: Text("🔄 Syncing $count scans...")),
+                          );
+                        },
+                        onEach: (code) {},
+                        onFinishedSummary: (success, failedCount) {
+                          totalSynced = success;
+                          failed = failedCount;
+                          final msg = failed == 0
+                              ? "✅ Sync complete — $totalSynced scans uploaded."
+                              : "⚠️ Sync done — $totalSynced uploaded, $failed failed.";
+                          scaffold.showSnackBar(SnackBar(content: Text(msg)));
+                        },
+                      );
+                      setState(() {});
+                    },
+                  ),
               ],
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 10),
+            FutureBuilder<DateTime?>(
+              future: _syncService.getLastSyncTime(),
+              builder: (_, snapshot) {
+                if (!snapshot.hasData) return const SizedBox.shrink();
+                final time = snapshot.data!;
+                final formatted = DateFormat('yMMMd – h:mm a').format(time.toLocal());
+                return Text("🕓 Last Sync: $formatted", style: const TextStyle(color: Colors.white70));
+              },
+            ),
+            const SizedBox(height: 12),
             const Text("Developed by Ali Hassan", style: TextStyle(color: Colors.white54)),
             const SizedBox(height: 10),
           ],

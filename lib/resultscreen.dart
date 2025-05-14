@@ -1,5 +1,3 @@
-// lib/resultscreen.dart
-
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +9,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:open_file/open_file.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'offline_url_checker.dart';
 import 'url_safety_checker.dart';
@@ -32,6 +31,7 @@ class _ResultscreenState extends State<Resultscreen> {
   Map<String, String> whatsappDetails = {};
   Map<String, dynamic> safetyResult = {};
   File? pdfFile;
+  bool isGenerating = false;
 
   @override
   void initState() {
@@ -71,25 +71,43 @@ class _ResultscreenState extends State<Resultscreen> {
   Future<void> _saveScan({required bool isSafe, required String message, String? reportUrl}) async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
-    await FirebaseFirestore.instance.collection('scanHistory').add({
-      'userId': user.uid,
-      'code': widget.code,
-      'type': dataType,
-      'isSafe': isSafe,
-      'message': message,
-      'reportUrl': reportUrl ?? '',
-      'timestamp': FieldValue.serverTimestamp(),
-    });
+
+    final collection = FirebaseFirestore.instance.collection('scanHistory');
+    final existing = await collection
+        .where('userId', isEqualTo: user.uid)
+        .where('code', isEqualTo: widget.code)
+        .orderBy('timestamp', descending: true)
+        .limit(1)
+        .get();
+
+    if (existing.docs.isNotEmpty) {
+      final doc = existing.docs.first;
+      final currentReport = doc['reportUrl'] ?? '';
+      if (currentReport.isEmpty && reportUrl != null && reportUrl.isNotEmpty) {
+        await doc.reference.update({'reportUrl': reportUrl});
+      }
+    } else {
+      await collection.add({
+        'userId': user.uid,
+        'code': widget.code,
+        'type': dataType,
+        'isSafe': isSafe,
+        'message': message,
+        'reportUrl': reportUrl ?? '',
+        'timestamp': FieldValue.serverTimestamp(),
+      });
+    }
   }
 
-   Future<void> _generatePdfReport() async {
+  Future<void> _generatePdfReport() async {
     if (safetyResult['isSafe'] == true) return;
 
+    setState(() => isGenerating = true);
     final user = FirebaseAuth.instance.currentUser;
-    final pdf = pw.Document();
     final now = DateTime.now();
     final section = safetyResult;
 
+    final pdf = pw.Document();
     pdf.addPage(pw.Page(
       theme: pw.ThemeData.withFont(
         base: pw.Font.helvetica(),
@@ -107,96 +125,91 @@ class _ResultscreenState extends State<Resultscreen> {
           if (wifiDetails.isNotEmpty) ...[
             pw.SizedBox(height: 8),
             pw.Text('--- Wi-Fi Details ---'),
-            ...wifiDetails.entries.map((e) => pw.Text('${e.key}: ${e.value}')).toList(),
+            ...wifiDetails.entries.map((e) => pw.Text('${e.key}: ${e.value}')),
           ],
           if (whatsappDetails.isNotEmpty) ...[
             pw.SizedBox(height: 8),
             pw.Text('--- WhatsApp Details ---'),
-            ...whatsappDetails.entries.map((e) => pw.Text('${e.key}: ${e.value}')).toList(),
+            ...whatsappDetails.entries.map((e) => pw.Text('${e.key}: ${e.value}')),
           ],
           pw.SizedBox(height: 12),
-
           pw.Text('1. HEURISTIC (OFFLINE) ANALYSIS', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
           for (var key in ['url_scheme', 'is_absolute', 'uses_ip', 'uses_shortener', 'suspicious_tld', 'contains_keywords', 'is_encoded', 'is_long_url'])
-            pw.Text('$key: ${section['heuristic']?[key]?.toString() ?? 'N/A'}'),
+            pw.Text('$key: ${section['heuristic']?[key] ?? 'N/A'}'),
           pw.Text('Trigger List:'),
-          for (var trigger in (section['heuristic']?['triggers'] as List? ?? [])) pw.Text('• $trigger'),
-
+          for (var t in (section['heuristic']?['triggers'] as List? ?? [])) pw.Text('- $t'),
           pw.SizedBox(height: 10),
           pw.Text('2. GOOGLE SAFE BROWSING', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-          pw.Text('Safe: ${section['google_safe'] ?? 'N/A'}'),
+          pw.Text('Safe: ${section['google_safe']}'),
           pw.Text('Matched Categories: ${section['google_matches']?.join(', ') ?? 'None'}'),
-          pw.Text('Details: ${section['google_message'] ?? 'N/A'}'),
-
+          pw.Text('Message: ${section['google_message'] ?? 'N/A'}'),
           pw.SizedBox(height: 10),
           pw.Text('3. VIRUSTOTAL SCAN', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-          pw.Text('Malicious Engines: ${section['vt_malicious'] ?? 'N/A'}'),
-          pw.Text('Suspicious Engines: ${section['vt_suspicious'] ?? 'N/A'}'),
-          pw.Text('Total Engines: ${section['vt_total'] ?? 'N/A'}'),
-          pw.Text('Safe: ${section['vt_safe'] ?? 'N/A'}'),
-          pw.Text('Message: ${section['vt_message'] ?? 'N/A'}'),
-
+          pw.Text('Malicious: ${section['vt_malicious']} / ${section['vt_total']}'),
+          pw.Text('Suspicious: ${section['vt_suspicious']}'),
+          pw.Text('Safe: ${section['vt_safe']}'),
+          pw.Text('Message: ${section['vt_message']}'),
           pw.SizedBox(height: 10),
           pw.Text('4. OPENPHISH FEED', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-          pw.Text('Listed in Feed: ${section['phish_safe'] == false}'),
+          pw.Text('Listed: ${section['phish_safe'] == false}'),
           pw.Text('Message: ${section['phish_message'] ?? 'N/A'}'),
-
           pw.SizedBox(height: 10),
           pw.Text('5. IPQUALITYSCORE', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-          for (var key in ['risk_score', 'malware', 'phishing', 'domain_rank', 'spamming', 'suspicious'])
-            pw.Text('$key: ${section['ipq']?[key]?.toString() ?? 'N/A'}'),
+          for (var k in ['risk_score', 'malware', 'phishing', 'domain_rank', 'spamming', 'suspicious'])
+            pw.Text('$k: ${section['ipq']?[k]}'),
           pw.Text('Message: ${section['ipq']?['message'] ?? 'N/A'}'),
-
           pw.SizedBox(height: 10),
           pw.Text('6. URLSCAN.IO', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
-          pw.Text('Status: ${section['scan_status'] ?? 'N/A'}'),
-          pw.Text('Result URL: ${section['scan_result'] ?? 'N/A'}'),
-          pw.Text('Screenshot URL: ${section['scan_screenshot'] ?? 'N/A'}'),
-
-          pw.SizedBox(height: 16),
-          pw.Text('FINAL VERDICT', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold)),
-          pw.Text('Overall Risk Score: ${(section['final_score'] ?? 0).toString()}%'),
-          pw.Text('Classification: ${section['isSafe'] == false ? 'Malicious' : 'Safe'}'),
-          pw.Text('Recommendation: ${section['finalVerdict'] ?? 'N/A'}'),
+          pw.Text('Status: ${section['scan_status']}'),
+          pw.Text('Result URL: ${section['scan_result']}'),
+          pw.Text('Screenshot: ${section['scan_screenshot']}'),
+          pw.SizedBox(height: 14),
+          pw.Text('FINAL VERDICT', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 16)),
+          pw.Text('Score: ${section['final_score']}%'),
+          pw.Text('Classification: ${section['isSafe'] == true ? 'Safe' : 'Malicious'}'),
+          pw.Text('Recommendation: ${section['finalVerdict']}'),
         ],
       ),
     ));
 
-    final dir = Directory('/storage/emulated/0/Download/QRShield');
-    if (!dir.existsSync()) dir.createSync(recursive: true);
+    final dir = await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/report_${now.millisecondsSinceEpoch}.pdf');
     await file.writeAsBytes(await pdf.save());
     pdfFile = file;
-    setState(() {});
 
     try {
       final ref = FirebaseStorage.instance.ref('reports/${user?.uid}/${file.uri.pathSegments.last}');
       await ref.putFile(file);
-      final url = await ref.getDownloadURL();
-      await _saveScan(isSafe: false, message: section['finalVerdict'] ?? '', reportUrl: url);
-    } catch (_) {}
+      final downloadUrl = await ref.getDownloadURL();
 
-    Navigator.push(context, MaterialPageRoute(builder: (_) => ViewPdfScreen(file: pdfFile!)));
+      await _saveScan(
+        isSafe: false,
+        message: section['finalVerdict'] ?? '',
+        reportUrl: downloadUrl,
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Upload failed: $e")));
+    }
+
+    setState(() => isGenerating = false);
+    Navigator.push(context, MaterialPageRoute(builder: (_) => ViewPdfScreen(file: file)));
   }
 
   Future<void> _accessOrCopyData() async {
-    final raw = widget.code.trim();
-    final uri = Uri.tryParse(raw.startsWith('http') ? raw : 'https://$raw');
-    final isOpenable = ['URL', 'Form', 'WhatsApp'].contains(dataType);
-
-    if (isOpenable && uri != null && await canLaunchUrl(uri)) {
+    final uri = Uri.tryParse(widget.code.startsWith('http') ? widget.code : 'https://${widget.code}');
+    if (['URL', 'Form', 'WhatsApp'].contains(dataType) && uri != null && await canLaunchUrl(uri)) {
       await launchUrl(uri);
     } else {
-      await Clipboard.setData(ClipboardData(text: raw));
+      await Clipboard.setData(ClipboardData(text: widget.code));
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
     }
   }
 
   String _detectQRDataType(String data) {
-    final l = data.toLowerCase();
-    if (l.contains('wa.me') || l.contains('api.whatsapp.com/send')) return 'WhatsApp';
-    if (l.contains('forms.gle') || l.contains('docs.google.com/forms')) return 'Form';
-    if (l.startsWith('http')) return 'URL';
+    final d = data.toLowerCase();
+    if (d.contains('wa.me') || d.contains('api.whatsapp.com/send')) return 'WhatsApp';
+    if (d.contains('forms.gle') || d.contains('docs.google.com/forms')) return 'Form';
+    if (d.startsWith('http')) return 'URL';
     if (data.startsWith('WIFI:')) return 'WiFi';
     if (RegExp(r'^\+?[0-9]{6,15}$').hasMatch(data)) return 'Phone';
     if (RegExp(r'^\w+@[\w\-]+\.\w{2,4}$').hasMatch(data)) return 'Email';
@@ -219,7 +232,7 @@ class _ResultscreenState extends State<Resultscreen> {
   Map<String, String> _parseWhatsAppDetails(String raw) {
     final uri = Uri.tryParse(raw);
     return {
-      'number': uri?.pathSegments.isNotEmpty == true ? uri!.pathSegments.first : '',
+      'number': uri?.pathSegments.firstOrNull ?? '',
       'text': uri?.queryParameters['text'] ?? '',
     };
   }
@@ -247,17 +260,17 @@ class _ResultscreenState extends State<Resultscreen> {
           const SizedBox(height: 12),
           FutureBuilder<Map<String, dynamic>>(
             future: urlSafetyCheck,
-            builder: (ctx, snap) {
+            builder: (_, snap) {
               if (!snap.hasData) return const CircularProgressIndicator();
               final d = snap.data!;
               final safe = d['isSafe'] == true;
               final score = (d['final_score'] as num? ?? 0).toDouble();
               final suggestion = safe
                   ? 'You may proceed to access this data.'
-                  : '⚠️ Do not proceed. This QR code may be malicious.';
+                  : 'Do not proceed. This QR code may be malicious.';
 
               return Column(children: [
-                Text(d['finalVerdict']?.toString() ?? '', style: TextStyle(color: safe ? Colors.green : Colors.red)),
+                Text(d['finalVerdict'] ?? '', style: TextStyle(color: safe ? Colors.green : Colors.red)),
                 LinearProgressIndicator(value: score / 100, color: safe ? Colors.green : Colors.red),
                 const SizedBox(height: 6),
                 Text(suggestion, style: const TextStyle(fontStyle: FontStyle.italic)),
@@ -269,18 +282,21 @@ class _ResultscreenState extends State<Resultscreen> {
                 ),
                 const SizedBox(height: 4),
                 if (!safe)
-                  ElevatedButton.icon(
-                    onPressed: _generatePdfReport,
-                    icon: const Icon(Icons.picture_as_pdf),
-                    label: const Text('Generate Report')),
+                  isGenerating
+                      ? const CircularProgressIndicator()
+                      : ElevatedButton.icon(
+                          onPressed: _generatePdfReport,
+                          icon: const Icon(Icons.picture_as_pdf),
+                          label: const Text('Generate Report'),
+                        ),
                 if (pdfFile != null)
                   TextButton.icon(
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => ViewPdfScreen(file: pdfFile!)),
-                    ),
                     icon: const Icon(Icons.remove_red_eye),
-                    label: const Text('View Report')),
+                    label: const Text('View Report'),
+                    onPressed: () {
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => ViewPdfScreen(file: pdfFile!)));
+                    },
+                  ),
               ]);
             },
           ),
