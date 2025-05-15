@@ -17,11 +17,8 @@ late UrlHausBlacklistLoader blacklistLoader;
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  // Load URLHaus blacklist from assets
   blacklistLoader = UrlHausBlacklistLoader();
   await blacklistLoader.loadFromAssets();
-
   runApp(const QRShieldApp());
 }
 
@@ -70,12 +67,14 @@ class _EntryPointState extends State<EntryPoint> {
     super.initState();
     _checkConnectivity();
     Connectivity().onConnectivityChanged.listen((status) {
+      if (!mounted) return;
       setState(() => isOffline = status == ConnectivityResult.none);
     });
   }
 
   Future<void> _checkConnectivity() async {
     final result = await Connectivity().checkConnectivity();
+    if (!mounted) return;
     setState(() => isOffline = result == ConnectivityResult.none);
   }
 

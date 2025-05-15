@@ -77,13 +77,27 @@ class _SignInScreenState extends State<SignInScreen> {
 
     return Scaffold(
       backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: BackButton(
+          color: Colors.white,
+          onPressed: () {
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (_) => const EntryPoint()),
+              (route) => false,
+            );
+          },
+        ),
+      ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              const SizedBox(height: 50),
+              const SizedBox(height: 20),
               Image.asset("assets/images/qrshield.png", height: 150),
               const SizedBox(height: 30),
               const Text("Welcome Back",
@@ -187,27 +201,16 @@ class _SignInScreenState extends State<SignInScreen> {
     try {
       await FirebaseAuth.instance.signInWithEmailAndPassword(email: email, password: password);
 
-      // Save credentials to secure local storage
       await _storage.write(key: 'email', value: email);
       await _storage.write(key: 'password', value: password);
+      await _storage.delete(key: 'user_pin'); // clean up legacy
 
-      // Check if a PIN exists for this email
-      final pinKey = 'pin_$email';
-      final savedPin = await _storage.read(key: pinKey);
-
-      // Clean up legacy key if exists
-      await _storage.delete(key: 'user_pin');
+      final savedPin = await _storage.read(key: 'pin_$email');
 
       if (savedPin != null) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => PinUnlockScreen(email: email, password: password)),
-        );
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => PinUnlockScreen(email: email, password: password)));
       } else {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const PinSetupScreen()),
-        );
+        Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const PinSetupScreen()));
       }
     } on FirebaseAuthException catch (e) {
       String error = "Login failed";

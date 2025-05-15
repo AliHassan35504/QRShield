@@ -1,7 +1,7 @@
 class OfflineUrlChecker {
   final List<String> shorteners = [
     'bit.ly', 'goo.gl', 't.co', 'tinyurl.com', 'is.gd',
-    'ow.ly', 'buff.ly', 'adf.ly', 'cutt.ly', 'shorte.st',
+    'ow.ly', 'buff.ly', 'adf.ly', 'cutt.ly', 'shorturl.at', 'shorte.st',
   ];
 
   final List<String> suspiciousTlds = ['.tk', '.ml', '.ga', '.cf', '.gq'];

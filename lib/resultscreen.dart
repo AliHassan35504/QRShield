@@ -1,3 +1,5 @@
+// lib/resultscreen.dart
+
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -55,7 +57,7 @@ class _ResultscreenState extends State<Resultscreen> {
       await _saveScan(
         isSafe: result['isSafe'] == true,
         message: result['finalVerdict'] ?? 'Unknown',
-        reportUrl: null,
+        reportUrl: '',
       );
 
       return result;
@@ -80,22 +82,20 @@ class _ResultscreenState extends State<Resultscreen> {
         .limit(1)
         .get();
 
+    final scanData = {
+      'userId': user.uid,
+      'code': widget.code,
+      'type': dataType,
+      'isSafe': isSafe,
+      'message': message,
+      'reportUrl': reportUrl ?? '',
+      'timestamp': FieldValue.serverTimestamp(),
+    };
+
     if (existing.docs.isNotEmpty) {
-      final doc = existing.docs.first;
-      final currentReport = doc['reportUrl'] ?? '';
-      if (currentReport.isEmpty && reportUrl != null && reportUrl.isNotEmpty) {
-        await doc.reference.update({'reportUrl': reportUrl});
-      }
+      await existing.docs.first.reference.update(scanData);
     } else {
-      await collection.add({
-        'userId': user.uid,
-        'code': widget.code,
-        'type': dataType,
-        'isSafe': isSafe,
-        'message': message,
-        'reportUrl': reportUrl ?? '',
-        'timestamp': FieldValue.serverTimestamp(),
-      });
+      await collection.add(scanData);
     }
   }
 
